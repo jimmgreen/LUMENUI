@@ -23,6 +23,13 @@ bool CloseTo(Color a, Color b, float tol = 0.06f) {
            std::fabs(a.b - b.b) <= tol && std::fabs(a.a - b.a) <= tol;
 }
 
+// 透明色叠加在底色上的最终像素
+Color Over(Color top, Color bottom) {
+    const float a = top.a;
+    return {top.r * a + bottom.r * (1.0f - a), top.g * a + bottom.g * (1.0f - a),
+            top.b * a + bottom.b * (1.0f - a), 1.0f};
+}
+
 // 测试子类：暴露 protected 布局接口与状态注入。
 struct TestRoot : StackPanel {
     using StackPanel::Measure;
@@ -123,25 +130,22 @@ void RenderScene(bool dark, const wchar_t* path) {
     if (scene.checked_box) {
         const Rect b = scene.checked_box->AbsoluteBounds();
         Color c{};
-        renderer.ReadPixel(static_cast<int>(b.x + 2.0f), static_cast<int>(b.y + b.h - 6.0f), c);
+        renderer.ReadPixel(static_cast<int>(b.x + 4.0f), static_cast<int>(b.y + b.h - 8.0f), c);
         Check(CloseTo(c, theme.accent), dark ? "dark checked box" : "light checked box");
     }
-    // 开关（开）轨道左半 ≈ accent（右半被滑块占据）
+    // 开关（开）轨道左段 ≈ accent（滑块从 x+11 开始）
     if (scene.on_switch) {
         const Rect b = scene.on_switch->AbsoluteBounds();
         Color c{};
-        renderer.ReadPixel(static_cast<int>(b.x + 10.0f), static_cast<int>(b.y + b.h * 0.5f), c);
+        renderer.ReadPixel(static_cast<int>(b.x + 7.0f), static_cast<int>(b.y + b.h * 0.5f), c);
         Check(CloseTo(c, theme.accent), dark ? "dark switch on" : "light switch on");
     }
-    // 列表选中行底色 ≈ selection 叠加在 card 上（右侧避开文本）
+    // 列表选中行底色 ≈ fill_selected 叠加在列表底（fill_input 叠加 bg）上
     if (scene.list) {
         const Rect b = scene.list->AbsoluteBounds();
         Color c{};
-        renderer.ReadPixel(static_cast<int>(b.x + b.w - 40.0f), static_cast<int>(b.y + 45.0f), c);
-        const float a = theme.selection.a;
-        Color expected{theme.selection.r * a + theme.card.r * (1.0f - a),
-                       theme.selection.g * a + theme.card.g * (1.0f - a),
-                       theme.selection.b * a + theme.card.b * (1.0f - a), 1.0f};
+        renderer.ReadPixel(static_cast<int>(b.x + b.w - 40.0f), static_cast<int>(b.y + 42.0f), c);
+        const Color expected = Over(theme.fill_selected, Over(theme.fill_input, theme.bg));
         Check(CloseTo(c, expected), dark ? "dark list selection" : "light list selection");
     }
 

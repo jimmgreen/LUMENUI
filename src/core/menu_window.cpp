@@ -243,14 +243,15 @@ void MenuWindow::Paint() {
     Painter painter;
     painter.BeginFrame(dc, &UiText(), scale_);
     const Rect surface{0.0f, 0.0f, width_dip_, height_dip_};
-    painter.FillRoundedRect(surface, theme_.radius_flyout, theme_.flyout);
-    painter.StrokeRoundedRect(surface, theme_.radius_flyout, theme_.control_stroke_strong);
+    painter.FillRoundedRect(surface, theme_.radius_flyout, theme_.surface_flyout);
+    painter.StrokeRoundedRect(surface, theme_.radius_flyout, theme_.control_stroke);
 
     float cursor = kMenuPad;
     for (size_t row = 0; row < row_item_.size(); ++row) {
         const int item_index = row_item_[row];
         if (item_index < 0) {
-            painter.FillRect({4.0f, cursor + 4.0f, width_dip_ - 8.0f, 1.0f}, theme_.divider);
+            painter.FillRect({12.0f, cursor + 4.0f, width_dip_ - 24.0f, 1.0f},
+                             theme_.stroke_divider);
             cursor += 9.0f;
             continue;
         }
@@ -258,8 +259,7 @@ void MenuWindow::Paint() {
         const Rect row_rect{0.0f, cursor, width_dip_, theme_.menu_item_height};
         const Color text_color = item.disabled ? theme_.text_disabled : theme_.text;
         if (static_cast<int>(row) == hover_row_ && !item.disabled) {
-            painter.FillRoundedRect(row_rect.Inset(4.0f, 2.0f), theme_.radius_control,
-                                    theme_.control_fill_hover);
+            painter.FillRoundedRect(row_rect.Inset(6.0f, 2.0f), 5.0f, theme_.fill_hover);
         }
         if (!item.glyph.empty() || item.checked) {
             painter.DrawIcon(item.checked ? L"\uE73E" : item.glyph.c_str(),

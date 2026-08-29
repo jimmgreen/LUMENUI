@@ -1,7 +1,12 @@
 #include "renderer.h"
+#include "lumatext_bridge.h"
+#include "text_service.h"
 #include <wrl/client.h>  // 仅用 IID_PPV_ARGS 辅助
 
 namespace fui {
+
+Renderer::Renderer() = default;
+Renderer::~Renderer() = default;
 
 bool Renderer::IsDeviceLost(HRESULT hr) noexcept {
     return hr == D2DERR_RECREATE_TARGET || hr == DXGI_ERROR_DEVICE_REMOVED ||
@@ -74,6 +79,9 @@ bool Renderer::CreateDeviceResources() {
 
     dc_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     dc_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
+
+    if (!luma_) luma_ = std::make_unique<LumaTextBridge>();
+    luma_->Init(UiText().Factory(), dc_.get());
     return true;
 }
 
@@ -91,6 +99,7 @@ bool Renderer::CreateTargetBitmap() {
 
 void Renderer::ReleaseDeviceResources() {
     ready_ = false;
+    if (luma_) luma_->Shutdown();
     target_.reset();
     dc_.reset();
     d2d_device_.reset();

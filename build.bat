@@ -13,5 +13,7 @@ if not defined VCVARS (
     exit /b 1
 )
 call "%VCVARS%" || exit /b 1
-cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release || exit /b 1
+set "LUMATEXT_ARGS="
+if exist "%ROOT%\..\lumatext\CMakeLists.txt" set "LUMATEXT_ARGS=-DLUMATEXT_SOURCE_DIR=%ROOT%\..\lumatext"
+cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release %LUMATEXT_ARGS% || exit /b 1
 cmake --build "%ROOT%\build" || exit /b 1

@@ -52,8 +52,8 @@ void ListView::OnFocusChanged(bool focused) {
 }
 
 bool ListView::OnAnimate(float dt_seconds) {
-    bool moving = Control::OnAnimate(dt_seconds);
-    moving |= EaseTo(scroll_offset_, target_offset_, dt_seconds, 20.0f, 0.1f);
+    bool moving = EaseTo(scroll_offset_, target_offset_, dt_seconds, 20.0f, 0.1f);
+    moving |= EaseTo(expand_progress_, hovered_ ? 1.0f : 0.0f, dt_seconds, 18.0f);
     return moving;
 }
 
@@ -131,16 +131,16 @@ void ListView::OnMouseMove(Point local, uint32_t buttons) {
     const ptrdiff_t row = RowAt(local);
     if (row != hover_row_) {
         hover_row_ = row;
+        Animate();   // 驱动滚动条展开动画
         Invalidate();
     }
 }
 
 void ListView::OnMouseLeave() {
     Control::OnMouseLeave();
-    if (hover_row_ != -1) {
-        hover_row_ = -1;
-        Invalidate();
-    }
+    hover_row_ = -1;
+    Animate();
+    Invalidate();
 }
 
 void ListView::OnWheel(float delta) {
@@ -155,7 +155,7 @@ void ListView::Draw(Painter& painter, const Theme& theme) {
     const float row_h = std::max(theme_row_height_, 1.0f);
     ClampScroll();
     painter.PushClip(absolute_);
-    painter.FillRoundedRect(absolute_, theme.radius_control, theme.card);
+    painter.FillRoundedRect(absolute_, theme.radius_control, theme.fill_input);
 
     const ptrdiff_t first = static_cast<ptrdiff_t>(scroll_offset_ / row_h);
     const ptrdiff_t visible = static_cast<ptrdiff_t>(absolute_.h / row_h) + 2;
@@ -164,10 +164,14 @@ void ListView::Draw(Painter& painter, const Theme& theme) {
         const Rect row_rect{absolute_.x,
                             absolute_.y + static_cast<float>(row) * row_h - scroll_offset_,
                             absolute_.w, row_h};
+        // 行底：左右各内缩 4、圆角 8；选中 = fill_selected + 左侧 3px accent 竖条
+        const Rect row_slot = row_rect.Inset(4.0f, 0.0f);
         if (row == selected_) {
-            painter.FillRect(row_rect, theme.selection);
+            painter.FillRoundedRect(row_slot, theme.radius_control, theme.fill_selected);
+            painter.FillRoundedRect({row_slot.x, row_slot.y, 3.0f, row_slot.h}, 1.5f,
+                                    theme.accent);
         } else if (row == hover_row_ && enabled_) {
-            painter.FillRect(row_rect, theme.control_fill_hover);
+            painter.FillRoundedRect(row_slot, theme.radius_control, theme.fill_hover);
         }
         const std::wstring text =
             item_text_ ? item_text_(static_cast<size_t>(row)) : std::wstring();
@@ -186,21 +190,23 @@ void ListView::Draw(Painter& painter, const Theme& theme) {
         }
     }
 
+    // 滚动条：2.5px 圆头滑块（悬停展开到 5px 由 expand_progress 驱动）
     const float content = static_cast<float>(item_count_) * row_h;
     if (content > absolute_.h + 0.5f) {
-        const float thumb_h = std::max(24.0f, absolute_.h * absolute_.h / content);
+        const float thumb_w = 2.5f + 2.5f * expand_progress_;
+        const float thumb_h = std::max(20.0f, absolute_.h * absolute_.h / content);
         const float track_h = absolute_.h - thumb_h;
         const float range = content - absolute_.h;
         const float thumb_y =
             absolute_.y + (range > 0.0f ? scroll_offset_ / range * track_h : 0.0f);
-        Color thumb_color = theme.text;
-        thumb_color.a = focused_ ? 0.40f : 0.25f;
-        painter.FillRoundedRect({absolute_.Right() - 6.0f, thumb_y, 3.0f, thumb_h}, 1.5f,
-                                thumb_color);
+        painter.FillRoundedRect(
+            {absolute_.Right() - 2.5f - thumb_w, thumb_y, thumb_w, thumb_h}, thumb_w * 0.5f,
+            theme.scrollbar_thumb);
     }
     painter.PopClip();
     if (focused_ && enabled_) {
-        painter.DrawFocusRing(absolute_, theme.radius_control, theme.focus_ring);
+        painter.DrawFocusRing(absolute_, theme.radius_control, theme.accent,
+                              theme.focus_ring_width);
     }
 }
 

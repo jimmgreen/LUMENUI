@@ -115,22 +115,27 @@ bool ComboBox::OnKey(uint32_t vk) {
 }
 
 void ComboBox::Draw(Painter& painter, const Theme& theme) {
-    Color fill = Mix(theme.control_fill, theme.control_fill_hover, hover_t_);
+    Color fill = theme.fill_input;
     Color border = theme.control_stroke;
-    if (dropdown_open_ || pressed_) {
-        fill = theme.control_fill_pressed;
-        border = theme.control_stroke_strong;
-    }
     if (!enabled_) {
-        fill.a *= 0.55f;
+        fill = theme.fill_input_disabled;
         border.a *= 0.5f;
+    } else if (dropdown_open_ || pressed_) {
+        fill = theme.fill_input_pressed;
+        border = theme.stroke_input_bottom;
+    } else if (hovered_) {
+        fill = theme.fill_input_hover;
     }
     painter.FillRoundedRect(absolute_, theme.radius_control, fill);
     painter.StrokeRoundedRect(absolute_, theme.radius_control, border);
-    if (focused_ && enabled_) {
-        painter.FillRoundedRect({absolute_.x + 2.0f, absolute_.Bottom() - 2.0f,
-                                 absolute_.w - 4.0f, 2.0f},
-                                1.0f, theme.accent);
+    if (enabled_) {
+        // 聚焦/悬停底部条（贴合圆角）
+        const float band = 2.0f;
+        painter.PushClip({absolute_.x + 1.0f, absolute_.Bottom() - band, absolute_.w - 2.0f, band});
+        painter.FillRoundedRect({absolute_.x, absolute_.Bottom() - 10.0f, absolute_.w, 10.0f},
+                                theme.radius_control,
+                                focused_ ? theme.accent : theme.stroke_input_bottom);
+        painter.PopClip();
     }
 
     painter.DrawIcon(icon::kChevronDown,

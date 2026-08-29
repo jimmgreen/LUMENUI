@@ -6,11 +6,16 @@
 #include <dxgi1_3.h>
 #include <dcomp.h>
 #include <d2d1_3.h>
+#include <memory>
 
 namespace fui {
 
+class LumaTextBridge;
+
 class Renderer {
 public:
+    Renderer();
+    ~Renderer();   // unique_ptr<LumaTextBridge> 需要完整类型，析构在 cpp 中定义
     bool Init(HWND hwnd, int width_px, int height_px);
     void Shutdown();
     void Resize(int width_px, int height_px);
@@ -20,6 +25,7 @@ public:
     bool NeedsRecovery() const noexcept { return device_lost_; }
     bool Ready() const noexcept { return ready_; }
     bool Recover();   // 重建全部设备资源
+    LumaTextBridge* Luma() noexcept { return luma_.get(); }
 
     int Width() const noexcept { return width_; }
     int Height() const noexcept { return height_; }
@@ -45,6 +51,7 @@ private:
     ComPtr<ID2D1Device1> d2d_device_;
     ComPtr<ID2D1DeviceContext2> dc_;
     ComPtr<ID2D1Bitmap1> target_;
+    std::unique_ptr<LumaTextBridge> luma_;
 };
 
 } // namespace fui

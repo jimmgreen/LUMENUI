@@ -6,11 +6,10 @@
 namespace fui {
 namespace {
 constexpr float kCircleSize = 20.0f;
-constexpr float kGap = 10.0f;
+constexpr float kGap = 8.0f;
 
-Color Mix(Color a, Color b, float t) {
-    return {Lerp(a.r, b.r, t), Lerp(a.g, b.g, t), Lerp(a.b, b.b, t), Lerp(a.a, b.a, t)};
-}
+Color Rgba(uint32_t rgb, float alpha) { return Color::Hex(rgb, alpha); }
+
 } // namespace
 
 void RadioButton::RelayoutParent() { Control::RelayoutParent(); }
@@ -18,7 +17,6 @@ void RadioButton::RelayoutParent() { Control::RelayoutParent(); }
 void RadioButton::SetChecked(bool value) {
     if (checked_ == value) return;
     checked_ = value;
-    Animate();
     Invalidate();
 }
 
@@ -29,30 +27,50 @@ Size RadioButton::Measure(Size, const Theme&) {
 }
 
 void RadioButton::Draw(Painter& painter, const Theme& theme) {
-    const Rect circle{absolute_.x, absolute_.y + (absolute_.h - kCircleSize) * 0.5f, kCircleSize,
-                      kCircleSize};
-    const float check_t = checked_ ? 1.0f : 0.0f;
+    const Rect circle{absolute_.x, absolute_.y + (absolute_.h - kCircleSize) * 0.5f,
+                      kCircleSize, kCircleSize};
+    const float outer_radius = kCircleSize * 0.5f;
 
-    Color fill = Mix(theme.control_fill, theme.control_fill_hover, hover_t_);
-    fill = Mix(fill, theme.control_fill_pressed, press_t_);
-    Color border = theme.control_stroke_strong;
-    if (check_t > 0.0f) {
-        fill = Mix(fill, theme.control_fill, check_t);
-        border = Mix(border, theme.accent, check_t);
+    if (checked_) {
+        // 选中：accent 粗环（5px，悬停且未按下时 4px），内部填主题底色
+        float thickness = hovered_ && !pressed_ ? 4.0f : 5.0f;
+        Color border = theme.accent;
+        Color fill = theme.dark ? Color::Hex(0x000000) : Color::Hex(0xFFFFFF);
+        if (!enabled_) {
+            thickness = 5.0f;
+            border = theme.dark ? Rgba(0xFFFFFF, 40.0f / 255.0f) : Rgba(0x000000, 55.0f / 255.0f);
+        }
+        painter.FillRoundedRect(circle, outer_radius, fill);
+        painter.StrokeRoundedRect(circle, outer_radius, border, thickness);
+    } else {
+        const float thickness = 1.0f;
+        Color border = theme.dark ? Rgba(0xFFFFFF, 153.0f / 255.0f) : Rgba(0x000000, 153.0f / 255.0f);
+        Color fill = theme.dark ? Rgba(0x000000, 26.0f / 255.0f) : Rgba(0x000000, 6.0f / 255.0f);
+        if (enabled_) {
+            if (hovered_) {
+                fill = theme.dark ? Rgba(0xFFFFFF, 11.0f / 255.0f) : Rgba(0x000000, 15.0f / 255.0f);
+            }
+            if (pressed_) {
+                border = theme.dark ? Rgba(0xFFFFFF, 40.0f / 255.0f) : Rgba(0x000000, 55.0f / 255.0f);
+                fill = theme.dark ? Color::Hex(0x000000) : Color::Hex(0xFFFFFF);
+            }
+        } else {
+            border = theme.dark ? Rgba(0xFFFFFF, 41.0f / 255.0f) : Rgba(0x000000, 55.0f / 255.0f);
+            fill = Color{0, 0, 0, 0};
+        }
+        painter.FillRoundedRect(circle, outer_radius, fill);
+        painter.StrokeRoundedRect(circle, outer_radius, border, thickness);
+        // 按下时的额外按压圈：r=7、线宽 4
+        if (pressed_ && enabled_) {
+            const Rect press_ring{circle.x + 3.0f, circle.y + 3.0f, 14.0f, 14.0f};
+            painter.StrokeRoundedRect(
+                press_ring, 7.0f,
+                theme.dark ? Rgba(0xFFFFFF, 40.0f / 255.0f) : Rgba(0x000000, 24.0f / 255.0f),
+                4.0f);
+        }
     }
-    if (!enabled_) {
-        fill.a *= 0.5f;
-        border.a *= 0.5f;
-    }
-    painter.FillRoundedRect(circle, kCircleSize * 0.5f, fill);
-    painter.StrokeRoundedRect(circle, kCircleSize * 0.5f, border);
-    if (focused_ && enabled_) painter.DrawFocusRing(circle, kCircleSize * 0.5f, theme.focus_ring);
-    if (check_t > 0.05f) {
-        const Rect dot = circle.Inset(kCircleSize * 0.3f, kCircleSize * 0.3f);
-        Color dot_color = theme.accent;
-        if (!enabled_) dot_color = theme.text_disabled;
-        dot_color.a *= check_t;
-        painter.FillRoundedRect(dot, dot.w * 0.5f, dot_color);
+    if (focused_ && enabled_) {
+        painter.DrawFocusRing(circle, outer_radius, theme.accent, theme.focus_ring_width);
     }
 
     if (!text_.empty()) {
@@ -69,14 +87,12 @@ void RadioButton::SelectExclusive() {
             if (auto* other = dynamic_cast<RadioButton*>(&parent_->Child(i))) {
                 if (other != this && other->group_ == group_ && other->checked_) {
                     other->checked_ = false;
-                    other->Animate();
                     other->Invalidate();
                 }
             }
         }
     }
     checked_ = true;
-    Animate();
 }
 
 void RadioButton::OnMouseUp(Point local, uint32_t buttons) {

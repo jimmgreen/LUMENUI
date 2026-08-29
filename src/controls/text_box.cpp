@@ -12,6 +12,8 @@ namespace fui {
 namespace {
 constexpr float kPadX = 10.0f;
 
+Color Rgba(uint32_t rgb, float alpha) { return Color::Hex(rgb, alpha); }
+
 IDWriteTextLayout* BodyLayout(const std::wstring& text) {
     return UiText().LineLayout(text, UiText().Format(TextRole::Body), 1.0e5f, Align::Leading);
 }
@@ -280,18 +282,34 @@ bool TextBox::OnAnimate(float dt_seconds) {
 
 void TextBox::Draw(Painter& painter, const Theme& theme) {
     const Rect frame = absolute_;
-    painter.FillRoundedRect(frame, theme.radius_control,
-                            enabled_ ? theme.control_fill : theme.control_fill_pressed);
-    painter.StrokeRoundedRect(frame, theme.radius_control, theme.control_stroke);
-    if (hover_t_ > 0.01f && enabled_) {
-        painter.StrokeRoundedRect(frame, theme.radius_control,
-                                  Color{theme.control_stroke_strong.r, theme.control_stroke_strong.g,
-                                        theme.control_stroke_strong.b,
-                                        theme.control_stroke_strong.a * 0.5f * hover_t_});
+    // 填充：rest fill_input → hover → 聚焦 fill_input_focus → 禁用
+    Color fill = theme.fill_input;
+    Color stroke = theme.dark ? Rgba(0xFFFFFF, 0.08f) : Rgba(0x000000, 13.0f / 255.0f);
+    if (!enabled_) {
+        fill = theme.fill_input_disabled;
+        stroke = theme.dark ? Rgba(0xFFFFFF, 0.0698f) : Rgba(0x000000, 0.0698f);
+    } else if (focused_) {
+        fill = theme.fill_input_focus;
+    } else if (hovered_) {
+        fill = theme.fill_input_hover;
     }
-    if (focused_ && enabled_) {
-        painter.FillRoundedRect({frame.x + 2.0f, frame.Bottom() - 2.0f, frame.w - 4.0f, 2.0f}, 1.0f,
-                                theme.accent);
+    painter.FillRoundedRect(frame, theme.radius_control, fill);
+    painter.StrokeRoundedRect(frame, theme.radius_control, stroke);
+
+    if (!enabled_) {
+        // 禁用：无底线
+    } else if (focused_) {
+        // 聚焦底部 accent 条：贴合圆角的"碗形"填充裁剪成 2px 带
+        const Rect bowl{frame.x, frame.Bottom() - 10.0f, frame.w, 10.0f};
+        painter.PushClip({frame.x + 1.0f, frame.Bottom() - std::max(2.0f, 2.0f), frame.w - 2.0f,
+                          std::max(2.0f, 2.0f)});
+        painter.FillRoundedRect(bowl, theme.radius_control, theme.accent);
+        painter.PopClip();
+    } else {
+        // 非聚焦底线：stroke_input_bottom 圆头描边裁剪出底边
+        painter.PushClip({frame.x + 1.0f, frame.Bottom() - 1.5f, frame.w - 2.0f, 1.5f});
+        painter.StrokeRoundedRect(frame, theme.radius_control, theme.stroke_input_bottom);
+        painter.PopClip();
     }
 
     painter.PushClip(frame);
@@ -307,10 +325,11 @@ void TextBox::Draw(Painter& painter, const Theme& theme) {
             painter.FillRoundedRect(
                 {frame.x + kPadX + start_x - scroll_x_, frame.y + 5.0f, end_x - start_x,
                  frame.h - 10.0f},
-                2.0f, theme.selection);
+                2.0f, theme.fill_selected);
         }
         painter.DrawText(text_, content, TextRole::Body,
-                         enabled_ ? theme.text : theme.text_disabled);
+                         enabled_ ? theme.text
+                                  : Color{theme.text.r, theme.text.g, theme.text.b, 92.0f / 255.0f});
     }
     if (focused_ && enabled_ && caret_on_) {
         const float caret_x = frame.x + kPadX + CaretX(caret_) - scroll_x_;

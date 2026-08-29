@@ -1,4 +1,5 @@
 #include "fluentui/Painter.h"
+#include "lumatext_bridge.h"
 #include "text_service.h"
 #include <cmath>
 
@@ -18,6 +19,14 @@ uint32_t PackColor(Color c) {
 
 float Snap(float value, float scale) {
     return std::floor(value * scale + 0.5f) / scale;
+}
+
+DWRITE_TEXT_ALIGNMENT MapAlign(Align align) {
+    switch (align) {
+    case Align::Center: return DWRITE_TEXT_ALIGNMENT_CENTER;
+    case Align::Trailing: return DWRITE_TEXT_ALIGNMENT_TRAILING;
+    default: return DWRITE_TEXT_ALIGNMENT_LEADING;
+    }
 }
 
 } // namespace
@@ -61,9 +70,9 @@ ID2D1StrokeStyle* Painter::RoundStroke() {
     dc_->GetFactory(&factory);
     if (!factory) return nullptr;
     D2D1_STROKE_STYLE_PROPERTIES props{};
-    props.startCap = D2D1_CAP_STYLE_FLAT;
-    props.endCap = D2D1_CAP_STYLE_FLAT;
-    props.dashCap = D2D1_CAP_STYLE_FLAT;
+    props.startCap = D2D1_CAP_STYLE_ROUND;
+    props.endCap = D2D1_CAP_STYLE_ROUND;
+    props.dashCap = D2D1_CAP_STYLE_ROUND;
     props.lineJoin = D2D1_LINE_JOIN_ROUND;
     props.miterLimit = 10.0f;
     props.dashStyle = D2D1_DASH_STYLE_SOLID;
@@ -86,7 +95,10 @@ void Painter::FillRoundedRect(const Rect& r, float radius, Color color) {
 void Painter::StrokeRoundedRect(const Rect& r, float radius, Color color, float width) {
     if (!dc_ || r.IsEmpty() || color.a <= 0.0f) return;
     radius = std::min(radius, std::min(r.w, r.h) * 0.5f);
-    dc_->DrawRoundedRectangle(D2D1_ROUNDED_RECT{ToD2D(r), radius, radius}, Brush(color),
+    // 描边向内收半个线宽做像素对齐，填充不收。
+    const Rect inset = r.Inset(width * 0.5f, width * 0.5f);
+    radius = std::max(0.0f, radius - width * 0.5f);
+    dc_->DrawRoundedRectangle(D2D1_ROUNDED_RECT{ToD2D(inset), radius, radius}, Brush(color),
                               width, RoundStroke());
 }
 
@@ -125,7 +137,23 @@ void Painter::DrawText(std::wstring_view text, const Rect& r, TextRole role, Col
     float width = max_width > 0.0f ? max_width : r.w;
     IDWriteTextFormat* format = text_->Format(role);
     if (!format) return;
-    DrawLayout(text_->LineLayout(text, format, width, align), r, color, align);
+    // 行盒上下取整到物理像素，保证基线稳定（与 DirectWrite 回退路径一致）。
+    Rect snapped = r;
+    snapped.y = Snap(r.y, scale_);
+    snapped.h = std::max(Snap(r.Bottom(), scale_) - snapped.y, 1.0f / scale_);
+    if (luma_) {
+        // LumaText 的文字已按物理像素栅格化到命令列表，必须在恒等变换下
+        // 1:1 上屏；经 DPI 变换放大就会发虚。字号由 bridge 按 scale 换算。
+        const D2D1_RECT_F physical{
+            snapped.x * scale_, snapped.y * scale_,
+            (snapped.x + width) * scale_, snapped.Bottom() * scale_};
+        dc_->SetTransform(D2D1::Matrix3x2F::Identity());
+        const bool drawn = luma_->Draw(text, format, physical, ToD2D(color),
+                                       ToD2D(backdrop_), scale_, MapAlign(align));
+        dc_->SetTransform(D2D1::Matrix3x2F::Scale(scale_, scale_));
+        if (drawn) return;
+    }
+    DrawLayout(text_->LineLayout(text, format, width, align), snapped, color, align);
 }
 
 Size Painter::MeasureText(std::wstring_view text, TextRole role, float max_width) {
@@ -168,10 +196,10 @@ void Painter::DrawIcon(std::wstring_view glyph, const Rect& r, float size, Color
                         D2D1_DRAW_TEXT_OPTIONS_NONE);
 }
 
-void Painter::DrawFocusRing(const Rect& r, float radius, Color color, float inset) {
-    if (!dc_ || color.a <= 0.0f) return;
-    Rect ring = r.Inset(1.0f + inset, 1.0f + inset);
-    StrokeRoundedRect(ring, std::max(1.0f, radius - 1.0f), color, 2.0f);
+void Painter::DrawFocusRing(const Rect& r, float radius, Color accent, float width) {
+    if (!dc_ || accent.a <= 0.0f) return;
+    const Rect ring = r.Inset(-1.0f, -1.0f);
+    StrokeRoundedRect(ring, radius + 1.0f, accent, width);
 }
 
 } // namespace fui
