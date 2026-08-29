@@ -343,6 +343,8 @@ void WindowImpl::Paint() {
     ID2D1DeviceContext2* dc = renderer_.BeginDraw();
     if (!dc) return;
     painter_.BeginFrame(dc, &UiText(), scale_);
+    painter_.SetLumaText(renderer_.Luma());
+    painter_.SetBackdrop(theme_.bg);
     const Rect client{0.0f, 0.0f, client_w_ / scale_, client_h_ / scale_};
     painter_.FillRect(client, theme_.bg);
     DrawTree(root_.get());

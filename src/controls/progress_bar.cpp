@@ -4,6 +4,11 @@
 #include <cmath>
 
 namespace fui {
+namespace {
+
+Color Rgba2(uint32_t rgb, float alpha) { return Color::Hex(rgb, alpha); }
+
+} // namespace
 
 void ProgressBar::RelayoutParent() { Control::RelayoutParent(); }
 
@@ -36,35 +41,37 @@ bool ProgressBar::OnAnimate(float dt_seconds) {
 }
 
 void ProgressBar::Draw(Painter& painter, const Theme& theme) {
-    const Rect track{absolute_.x, absolute_.y + (absolute_.h - 3.0f) * 0.5f, absolute_.w, 3.0f};
-    painter.FillRoundedRect(track, 1.5f, theme.divider);
+    // 底轨是 1px 直线；填充条高 4px 圆角
+    const float bar_h = 3.0f;
+    const float cy = absolute_.y + absolute_.h * 0.5f;
+    const Rect track{absolute_.x, cy - bar_h * 0.5f, absolute_.w, bar_h};
+    painter.FillRect({track.x, cy - 0.5f, track.w, 1.0f},
+                     theme.dark ? Rgba2(0xFFFFFF, 155.0f / 255.0f) : Rgba2(0x000000, 155.0f / 255.0f));
     if (indeterminate_) {
-        // 双段扫描：主段 + 延迟尾段，周期 2.4s
-        const float cycle = std::fmod(phase_, 2.4f);
-        const float w = absolute_.w;
-        const float span = w * 0.35f;
-        auto segment = [&](float start, float end) {
-            const float x0 = std::max(track.x, start);
-            const float x1 = std::min(track.Right(), end);
-            if (x1 > x0) painter.FillRoundedRect({x0, track.y, x1 - x0, track.h}, 1.5f, theme.accent);
+        // 双条循环，总周期 1952ms：短条 833ms 线性、长条 1167ms OutQuad 且延迟 785ms
+        const float cycle_ms = std::fmod(phase_ * 1000.0f, 1952.0f);
+        const float w = track.w;
+        auto bar = [&](float pos, float bar_w) {
+            const float left = (pos - bar_w) * w;
+            const float right = pos * w;
+            if (right <= track.x || left >= track.Right()) return;
+            painter.FillRoundedRect({std::max(left, track.x), track.y,
+                                     std::min(right, track.Right()) - std::max(left, track.x),
+                                     track.h},
+                                    track.h * 0.5f, theme.accent);
         };
-        // 段 1：0 → 1.2s 从左扫到右
-        if (cycle < 1.2f) {
-            const float t = cycle / 1.2f;
-            const float head = -span + t * (w + span * 2.0f);
-            segment(head - span, head);
-        }
-        // 段 2：0.4 → 2.0s 跟随
-        if (cycle > 0.4f && cycle < 2.0f) {
-            const float t = (cycle - 0.4f) / 1.2f;
-            const float head = -span + t * (w + span * 2.0f);
-            segment(head - span * 0.6f, head);
-        }
+        const auto linear = [](float t) { return Clamp(t, 0.0f, 1.0f); };
+        const auto out_quad = [](float t) {
+            t = Clamp(t, 0.0f, 1.0f);
+            return 1.0f - (1.0f - t) * (1.0f - t);
+        };
+        bar(1.45f * linear(cycle_ms / 833.0f), 0.4f);
+        bar(1.75f * out_quad((cycle_ms - 785.0f) / 1167.0f), 0.6f);
     } else {
-        const float fill_w = std::max(absolute_.w * value_, value_ > 0.0f ? 4.0f : 0.0f);
+        const float fill_w = std::max(track.w * value_, value_ > 0.0f ? 4.0f : 0.0f);
         if (fill_w > 0.5f) {
-            painter.FillRoundedRect({track.x, track.y, std::min(fill_w, absolute_.w), track.h}, 1.5f,
-                                    theme.accent);
+            painter.FillRoundedRect({track.x, track.y, std::min(fill_w, track.w), track.h},
+                                    track.h * 0.5f, theme.accent);
         }
     }
 }

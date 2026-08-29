@@ -24,7 +24,7 @@ Size Slider::Measure(Size, const Theme&) {
 }
 
 void Slider::OnFocusChanged(bool focused) {
-    Control::OnFocusChanged(focused);
+    focused_ = focused;
     Invalidate();
 }
 
@@ -47,19 +47,19 @@ void Slider::Draw(Painter& painter, const Theme& theme) {
     const float t = max_ > min_ ? (value_ - min_) / (max_ - min_) : 0.0f;
 
     const Rect track{absolute_.x + half, track_y - 2.0f, absolute_.w - half * 2.0f, 4.0f};
-    painter.FillRoundedRect(track, 2.0f, theme.divider);
+    painter.FillRoundedRect(track, 2.0f, theme.stroke_divider);
     if (t > 0.001f) {
         const float fill_w = std::max(track.w * t, 4.0f);
         painter.FillRoundedRect({track.x, track.y, std::min(fill_w, track.w), track.h}, 2.0f,
                                 enabled_ ? theme.accent : theme.text_disabled);
     }
-    const float knob = 18.0f + press_t_ * 4.0f;
+    const float knob = pressed_ && enabled_ ? 22.0f : 18.0f;
     const Rect thumb{absolute_.x + half + (absolute_.w - half * 2.0f) * t - knob * 0.5f,
                      track_y - knob * 0.5f, knob, knob};
     painter.FillRoundedRect(thumb, knob * 0.5f,
                             enabled_ ? theme.accent : theme.text_disabled);
     if (focused_ && enabled_) {
-        painter.DrawFocusRing(thumb, knob * 0.5f, theme.focus_ring, 2.0f);
+        painter.DrawFocusRing(thumb, knob * 0.5f, theme.accent, theme.focus_ring_width);
     }
 }
 
@@ -87,7 +87,7 @@ void Slider::OnMouseDown(Point local, uint32_t buttons) {
     (void)buttons;
     if (!enabled_) return;
     pressed_ = true;
-    Animate();
+    Invalidate();
     TrackThumb(local);
 }
 
@@ -100,7 +100,7 @@ void Slider::OnMouseUp(Point local, uint32_t buttons) {
     (void)local;
     (void)buttons;
     pressed_ = false;
-    Animate();
+    Invalidate();
 }
 
 } // namespace fui

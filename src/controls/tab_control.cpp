@@ -96,7 +96,7 @@ void TabControl::Draw(Painter& painter, const Theme& theme) {
         x += w;
     }
     painter.FillRect({absolute_.x, absolute_.y + kStripHeight - 1.0f, absolute_.w, 1.0f},
-                     theme.divider);
+                     theme.stroke_divider);
 }
 
 void TabControl::OnMouseMove(Point local, uint32_t buttons) {

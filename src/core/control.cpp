@@ -40,21 +40,17 @@ void Control::Arrange(const Rect& absolute) {
 
 void Control::OnMouseEnter() {
     hovered_ = true;
-    Animate();
+    Invalidate();
 }
 
 void Control::OnMouseLeave() {
     hovered_ = false;
     pressed_ = false;
-    Animate();
+    Invalidate();
 }
 
-bool Control::OnAnimate(float dt_seconds) {
-    const float target_hover = hovered_ && enabled_ ? 1.0f : 0.0f;
-    const float target_press = pressed_ && enabled_ ? 1.0f : 0.0f;
-    bool moving = EaseTo(hover_t_, target_hover, dt_seconds);
-    moving |= EaseTo(press_t_, target_press, dt_seconds);
-    return moving;
+bool Control::OnAnimate(float) {
+    return false;   // 状态切换瞬时生效；动画型控件自行覆写
 }
 
 bool Control::EaseTo(float& value, float target, float dt, float speed, float epsilon) {

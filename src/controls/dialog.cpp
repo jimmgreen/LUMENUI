@@ -86,8 +86,8 @@ void Dialog::Arrange(const Rect& absolute) {
 }
 
 void Dialog::Draw(Painter& painter, const Theme& theme) {
-    painter.FillRoundedRect(absolute_, theme.radius_card, theme.card);
-    painter.StrokeRoundedRect(absolute_, theme.radius_card, theme.control_stroke);
+    painter.FillRoundedRect(absolute_, theme.radius_card, theme.surface_flyout);
+    painter.StrokeRoundedRect(absolute_, theme.radius_card, theme.stroke_card);
     painter.DrawText(title_, {absolute_.x + kCardPad, absolute_.y + 20.0f, absolute_.w - kCardPad * 2.0f, 28.0f},
                      TextRole::Title, theme.text);
     if (!message_.empty()) {
@@ -98,18 +98,21 @@ void Dialog::Draw(Painter& painter, const Theme& theme) {
 
     auto draw_button = [&](const Rect& rect, const std::wstring& label, bool accent, bool hot,
                            bool press) {
-        Color fill = accent ? Mix(theme.accent, theme.accent_hover, hot ? 1.0f : 0.0f)
-                            : Mix(theme.control_fill, theme.control_fill_hover, hot ? 1.0f : 0.0f);
-        fill = Mix(fill, accent ? theme.accent_pressed : theme.control_fill_pressed,
-                   press ? 1.0f : 0.0f);
+        Color fill = accent ? theme.accent : theme.fill_input;
+        Color text_color = accent ? theme.primary_text : theme.text;
         if (accent) {
+            if (press) fill = theme.accent_pressed;
+            else if (hot) fill = theme.accent_hover;
+            if (press) text_color = theme.primary_text_pressed;
             painter.FillRoundedRect(rect, theme.radius_control, fill);
+            painter.StrokeRoundedRect(rect, theme.radius_control, fill);
         } else {
+            if (press) fill = theme.fill_input_pressed;
+            else if (hot) fill = theme.fill_input_hover;
             painter.FillRoundedRect(rect, theme.radius_control, fill);
             painter.StrokeRoundedRect(rect, theme.radius_control, theme.control_stroke);
         }
-        painter.DrawText(label, rect, TextRole::Body,
-                         accent ? theme.accent_text : theme.text, Align::Center);
+        painter.DrawText(label, rect, TextRole::Body, text_color, Align::Center);
     };
     if (!secondary_label_.empty()) {
         draw_button(secondary_rect_, secondary_label_, false, secondary_hot_, secondary_press_);

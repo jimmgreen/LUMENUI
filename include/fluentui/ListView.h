@@ -47,7 +47,8 @@ protected:
     ptrdiff_t selected_ = -1;
     float scroll_offset_ = 0.0f;     // 当前滚动（DIP，平滑插值）
     float target_offset_ = 0.0f;     // 目标滚动
-    float theme_row_height_ = 30.0f;
+    float theme_row_height_ = 28.0f;
+    float expand_progress_ = 0.0f;   // 滚动条悬停展开 2.5 → 5px
     ptrdiff_t hover_row_ = -1;
     ptrdiff_t keyboard_anchor_ = -1; // Shift 选区起点
     std::function<std::wstring(size_t)> item_text_;
