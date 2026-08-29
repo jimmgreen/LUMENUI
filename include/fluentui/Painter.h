@@ -67,6 +67,10 @@ private:
     ID2D1StrokeStyle* round_stroke_ = nullptr;
 };
 
+// 与 DrawTextWrapped 相同的换行算法，返回多行总高度（布局测量用）。
+float MeasureWrappedHeight(TextService& text, std::wstring_view text_view, TextRole role,
+                           float width);
+
 // 绘制一棵控件子树（按可见性递归）。供离屏渲染与测试使用。
 void DrawControlTree(Painter& painter, const Theme& theme, Control* root);
 

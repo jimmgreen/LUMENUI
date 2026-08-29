@@ -142,8 +142,10 @@ struct LumaTextBridge::Impl {
     LumaText::FontFace yahei_bold;
     LumaText::FontFace segoe_regular;
     LumaText::FontFace segoe_bold;
+    LumaText::FontFace icons_face;
     LumaText::FontCascade yahei_cascade;
     LumaText::FontCascade segoe_cascade;
+    LumaText::FontCascade icons_cascade;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> target_dc;
     Microsoft::WRL::ComPtr<ID2D1DeviceContext> recording_dc;
     bool busy = false;
@@ -155,6 +157,7 @@ struct LumaTextBridge::Impl {
 
     static constexpr std::uint32_t kYaHei = 1;
     static constexpr std::uint32_t kSegoe = 2;
+    static constexpr std::uint32_t kIcons = 3;
     // 每窗口独立缓存，保持小而热；布局被淘汰时其表面一并失效。
     static constexpr size_t kLayoutCacheLimit = 512;
     static constexpr size_t kSurfaceCountLimit = 512;
@@ -341,6 +344,19 @@ struct LumaTextBridge::Impl {
         PushFace(segoe_entries, yahei_bold, 700);
         if (segoe_entries.empty() || !MakeCascade(segoe_entries, segoe_cascade)) return false;
 
+        // 图标字形（Segoe Fluent Icons / Segoe MDL2 Assets 同码位），使图标
+        // 文本也走 LumaText 的清晰路径；加载失败时图标回退 DirectWrite。
+        if (!MakeFace(FontPath(L"segfluent.ttf"), icons_face) &&
+            !MakeFace(FontPath(L"SegMDL2.ttf"), icons_face) &&
+            !MakeFace(FontPath(L"segmdl2.ttf"), icons_face)) {
+            icons_face.reset();
+        }
+        if (icons_face) {
+            std::vector<lt_font_cascade_entry> icons_entries;
+            PushFace(icons_entries, icons_face, 400);
+            MakeCascade(icons_entries, icons_cascade);
+        }
+
         auto profile_desc = LumaText::Descriptor<lt_render_profile_desc>();
         profile_desc.light = LumaText::Descriptor<lt_render_config>();
         profile_desc.light.coverage_gamma = 0.85f;
@@ -357,8 +373,10 @@ struct LumaTextBridge::Impl {
         layouts.clear();
         layout_lru.clear();
         busy = false;
+        icons_cascade.reset();
         segoe_cascade.reset();
         yahei_cascade.reset();
+        icons_face.reset();
         segoe_bold.reset();
         segoe_regular.reset();
         yahei_bold.reset();
@@ -404,10 +422,17 @@ struct LumaTextBridge::Impl {
                         std::uint32_t& family, LumaText::FontCascade*& cascade) {
         if (!format) return false;
         const std::wstring family_name = FontFamily(format);
+        const bool icon_font = Contains(family_name, L"Icons") ||
+                               Contains(family_name, L"MDL2") ||
+                               Contains(family_name, L"Assets");
+        if (icon_font) {
+            if (!icons_cascade.get()) return false;
+            family = kIcons;
+            cascade = &icons_cascade;
+            return true;
+        }
         const bool yahei = Contains(family_name, L"Microsoft YaHei");
         const bool segoe_text = Contains(family_name, L"Segoe UI") &&
-                                !Contains(family_name, L"Icons") &&
-                                !Contains(family_name, L"Assets") &&
                                 !Contains(family_name, L"Emoji");
         if (!yahei && !segoe_text) return false;
         // 中文内容始终优先 YaHei 级联，与 DirectWrite family 无关。

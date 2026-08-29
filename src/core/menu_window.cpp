@@ -242,6 +242,8 @@ void MenuWindow::Paint() {
     if (!dc) return;
     Painter painter;
     painter.BeginFrame(dc, &UiText(), scale_);
+    painter.SetLumaText(renderer_->Luma());
+    painter.SetBackdrop(theme_.surface_flyout);
     const Rect surface{0.0f, 0.0f, width_dip_, height_dip_};
     painter.FillRoundedRect(surface, theme_.radius_flyout, theme_.surface_flyout);
     painter.StrokeRoundedRect(surface, theme_.radius_flyout, theme_.control_stroke);

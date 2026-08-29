@@ -52,7 +52,8 @@ Size Dialog::Measure(Size available, const Theme&) {
     const float width = std::min(420.0f, std::max(available.w - 24.0f, 240.0f));
     float height = 24.0f + 28.0f;
     if (!message_.empty()) {
-        height += 8.0f + UiText().MeasureWrapped(message_, TextRole::Body, width - kCardPad * 2.0f);
+        height += 8.0f + MeasureWrappedHeight(UiText(), message_, TextRole::Body,
+                                              width - kCardPad * 2.0f);
     }
     if (!default_close_ && (!primary_label_.empty() || !secondary_label_.empty())) {
         height += 24.0f + kButtonH;
