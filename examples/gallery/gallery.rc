@@ -1,0 +1,4 @@
+#include "resources/resource.h"
+
+IDI_LUMEN_GALLERY ICON "resources\\lumen_gallery.ico"
+IDR_LUMEN_GALLERY_ICO RCDATA "resources\\lumen_gallery.ico"

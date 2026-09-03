@@ -1,12 +1,14 @@
 // text_service.h — DirectWrite 字体策略与布局缓存。设备无关，进程内单例。
 #pragma once
 #include "com_ptr.h"
-#include "fluentui/Core.h"
+#include "lumen/Core.h"
 #include <dwrite_3.h>
+#include <list>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 
-namespace fui {
+namespace lumen {
 
 class TextService {
 public:
@@ -25,6 +27,11 @@ public:
 
     Size MeasureText(std::wstring_view text, TextRole role, float max_width = 0.0f);
     float MeasureWrapped(std::wstring_view text, TextRole role, float wrap_width);
+
+    // 预乘透明表面用灰度 AA（ClearType 会出彩边）。gamma 1.9、对比 0.5。
+    IDWriteRenderingParams* GrayscaleParams();
+    // 正值表示 CJK 回退字形相对拉丁基线应上移的 DIP。
+    float CjkBaselineNudge(float em_size) const noexcept;
 
 private:
     IDWriteTextLayout* CreateLayout(std::wstring_view text, IDWriteTextFormat* format,
@@ -59,17 +66,35 @@ private:
         }
     };
 
+    struct LayoutEntry {
+        IDWriteTextLayout* layout = nullptr;
+        std::list<LayoutKey>::iterator lru;
+    };
+
+    void TouchLayout(LayoutEntry& entry);
+    void EvictOldestLayout();
+
+    void ApplyLayoutFeatures(IDWriteTextLayout* layout, IDWriteTextFormat* format,
+                             uint32_t length);
+    void EnsureFontFallback();
+    void CacheFontMetrics();
+
     ComPtr<IDWriteFactory3> factory_;
-    ComPtr<IDWriteTextFormat> formats_[7];
+    ComPtr<IDWriteTextFormat> formats_[kTextRoleCount];
+    ComPtr<IDWriteFontFallback> font_fallback_;
+    ComPtr<IDWriteRenderingParams> grayscale_params_;
+    ComPtr<IDWriteTypography> tabular_;
     std::unordered_map<uint32_t, ComPtr<IDWriteTextFormat>> icon_formats_;
-    std::unordered_map<LayoutKey, IDWriteTextLayout*, LayoutKeyHash> layouts_;
+    std::unordered_map<LayoutKey, LayoutEntry, LayoutKeyHash> layouts_;
+    std::list<LayoutKey> layout_lru_;
+    std::wstring ellipsis_probe_;   // 省略号二分探针，容量跨调用保留
     bool families_resolved_ = false;
     wchar_t body_family_[64] = {};
-    wchar_t title_family_[64] = {};
     wchar_t icon_family_[64] = {};
-    wchar_t mono_family_[64] = {};
+    wchar_t cjk_family_[64] = {};
+    float cjk_nudge_em_ = 0.0f;
 };
 
 TextService& UiText();   // 进程内共享实例（DWrite 对象均设备无关）
 
-} // namespace fui
+} // namespace lumen

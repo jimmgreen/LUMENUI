@@ -1,7 +1,7 @@
 // offscreen.h — 离屏渲染器：无窗口绘制到 D2D 位图，用于视觉回归与性能基准。
 #pragma once
 #include "com_ptr.h"
-#include "fluentui/Core.h"
+#include "lumen/Core.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_3.h>
@@ -9,7 +9,7 @@
 #include <wincodec.h>
 #include <vector>
 
-namespace fui {
+namespace lumen {
 
 class OffscreenRenderer {
 public:
@@ -19,6 +19,7 @@ public:
     ID2D1DeviceContext2* BeginDraw();
     bool EndDraw();
     bool SavePNG(const wchar_t* path);   // 需先 CoInitializeEx
+    bool ReadBack(std::vector<uint8_t>& bgra);
     bool ReadPixel(int x, int y, Color& out);
 
     int Width() const noexcept { return width_; }
@@ -26,7 +27,6 @@ public:
 
 private:
     bool CreateTarget();
-    bool ReadBack(std::vector<uint8_t>& bgra);
 
     int width_ = 0, height_ = 0;
     ComPtr<ID3D11Device> d3d_;
@@ -40,4 +40,6 @@ private:
     ComPtr<IWICImagingFactory> wic_;
 };
 
-} // namespace fui
+} // namespace lumen
+
+#include "lumen/win_undef.h"

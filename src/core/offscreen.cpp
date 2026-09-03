@@ -3,7 +3,7 @@
 #include <objbase.h>
 #include <vector>
 
-namespace fui {
+namespace lumen {
 
 bool OffscreenRenderer::Init(int width_px, int height_px) {
     width_ = width_px;
@@ -105,6 +105,7 @@ bool OffscreenRenderer::ReadBack(std::vector<uint8_t>& bgra) {
 }
 
 bool OffscreenRenderer::ReadPixel(int x, int y, Color& out) {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_) return false;
     std::vector<uint8_t> bgra;
     if (!ReadBack(bgra)) return false;
     const uint8_t* px = bgra.data() + (static_cast<size_t>(y) * width_ + x) * 4;
@@ -147,4 +148,4 @@ bool OffscreenRenderer::SavePNG(const wchar_t* path) {
     return SUCCEEDED(encoder->Commit());
 }
 
-} // namespace fui
+} // namespace lumen

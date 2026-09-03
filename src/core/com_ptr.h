@@ -1,7 +1,7 @@
 // com_ptr.h — 极简 COM 智能指针。
 #pragma once
 
-namespace fui {
+namespace lumen {
 
 template <typename T>
 struct ComPtr {
@@ -12,7 +12,12 @@ struct ComPtr {
     ComPtr& operator=(const ComPtr&) = delete;
     ComPtr(ComPtr&& o) noexcept : p(o.p) { o.p = nullptr; }
     ComPtr& operator=(ComPtr&& o) noexcept {
-        if (this != &o) { if (p) p->Release(); p = o.p; o.p = nullptr; }
+        if (p != o.p) {
+            T* src = o.p;
+            o.p = nullptr;
+            reset();
+            p = src;
+        }
         return *this;
     }
     T** operator&() noexcept { return &p; }
@@ -23,4 +28,4 @@ struct ComPtr {
     void reset() noexcept { if (p) { p->Release(); p = nullptr; } }
 };
 
-} // namespace fui
+} // namespace lumen
