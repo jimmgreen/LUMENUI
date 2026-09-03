@@ -203,9 +203,101 @@ window.Confirm(L"删除", L"不可恢复", [](bool yes) { (void)yes; });
 
 ## 控件
 
-所有配置方法与事件注册都返回控件引用，可链式声明到底；基类方法（`ToolTip`/`Enabled`/`Grow` 等）在各控件里都有转发重载，放在链中任意位置都不会截断后续调用：`combo.AddItems({L"A", L"B"}).SelectedIndex(1).Editable(true)`；`Table` 支持列式配置 `table.AddColumn(L"On", 64.0f).CheckBox(get, set).Sortable(true)`（代理可隐式转回列下标）。排序后的 Table 注意双空间：`SelectedIndex()` 是视图行、绑定回调拿到的是数据行，回调里查自家数据用 `SelectedDataIndex()`；菜单弹出用 `menu.PopupTo(control)`，分割按钮用 `split.DropdownMenu(std::move(menu))`，下拉按钮用 `dd.DropdownMenu(std::move(menu))` 一行接好。
+链式 setter 都返回自身；基类方法（`ToolTip` / `Enabled` / `Grow`）在各控件上有转发，可插在链中任意位置。菜单 `menu.PopupTo(control)`，分割/下拉按钮 `DropdownMenu(std::move(menu))`。
 
-Button（Solid Radiant / Electric Edge 流光 / Glass Specular / Halo / 白热警示，`Shimmer(true)` 开启流光边框）、RepeatButton（按住连发，默认 delay 0.40s / interval 0.05s）、CheckBox、ToggleButton、RadioButton、Switch、TextBox（单行/多行、选区/剪贴板/撤销重做/聚焦光晕）、PasswordBox（可选明文揭示开关）、HotkeyBox（捕获 Ctrl+K 这类快捷键）、Slider、RangeSlider（双拇指区间）、ProgressBar（确定/不定态）、ProgressRing、Sparkline（折线/柱状/面积迷你图）、Gauge（240° 径向仪表）、Chart（折线/柱/面积/环/热力/雷达/漏斗/子弹）、ComboBox（虚拟化下拉、分组、多选 Chip、可选 Editable 筛选、键入跳转）、AutoSuggestBox（继承 TextBox 的建议输入）、NumberBox（数字过滤/步进/失焦钳制 + spin 区）、DatePicker/TimePicker（`std::chrono` 值 + 系统区域格式弹层）、CalendarView、ColorPicker（单色亮度盘）、ImageView（WIC 文件/内存解码 + 缩放/圆角）、CommandBar（自动溢出 + Toggle）、NavigationView（Auto/Expanded/Compact 单层导航）、Menu（子菜单/长列表滚动/快捷键；入场缩放走 DComp Visual）、Dialog（亚克力模糊遮罩 + 外发光模态，页脚真按钮可聚焦）、BusyOverlay（`Window::ShowBusy` 窗口忙碌遮罩）、Drawer（贴边临时抽屉）、Flyout（锚定轻弹层，点窗外轻触关闭）、TeachingTip（带箭头的引导气泡，与 Flyout 共用 overlay）、ToolTip（`Control::ToolTip` 字符串或 `std::unique_ptr<ToolTip>` 自定义内容，窗口层 overlay）、Toast（`Window::ShowToast`：图标 / 操作钮 / 时长 / 语义，悬停暂停退场）、ListView（虚拟化列表 + 覆盖滚动条 + 多选：Ctrl+点击/Shift 范围/Ctrl+A + `Bind(ItemsModel)`）、GridView（虚拟化图标网格）、Table（虚拟化表格 + 表头 + 列宽拖动 + 表头点击排序 + 双击单元格行内编辑 + Progress/Icon 列 + `Bind(ItemsModel)` / `Column(title, &T::mem)`）、LogView（等宽日志、贴底跟随、Ctrl+C）、TreeView（虚拟化层级树：数据回调或 `SetFlatData` 平铺入口 + 展平可见缓存 + ExpandAll）、TreeTable（树形展开 + 多列表头，第一列是树）、Breadcrumb（面包屑导航）、TabControl、Pagination（分页器）、Label（`TextGlow(true)` 文字辉光）、RichLabel（加粗/次要/内联链接混排换行）、Badge/Chip、InfoBadge（导航/标签/图标角标）、TokenBox（Enter/逗号提交标签）、Form / FormField（标签/必填/`Validate` 规则，包任意子控件）、SettingsCard/Expander（聚光卡片，可键盘操作）、GroupBox（带标题轻量分组 + 卡片聚光）、Viewbox（子级按自然尺寸排布再缩放绘制）、SplitView（可折叠侧边栏 + 主内容区）、Splitter（拖拽分栏）、MenuBar（窗口菜单栏）、StatusBar（窗口底栏：路径/缩放/计数）、DropDownButton（整钮弹出菜单，无主操作分隔）、EmptyState（空状态）、FileDropZone（资源管理器拖入文件）、Carousel（轮播 + 圆点）、Stepper（步骤条，已完成可回跳）、InfoBar（标题/正文/关闭 + `Action` 操作钮，语义靠字形与亮度）、HyperlinkButton、Skeleton（加载骨架屏，呼吸微光）、Rating（单色星级，部分填充/悬停预览）、Avatar（首字头像 + 在线状态点）、Separator、ColorSwatch（可作光效强度档位）、IconView、ScrollViewer（裁切视口 + 覆盖滚动条 + 焦点滚入视野）、Row/Column/Grid/WrapPanel/ZStack/Spacer、StackPanel/Panel（`CardStyle::Lumen` 聚光卡）。
+### 按钮
+
+| 控件 | 说明 |
+| --- | --- |
+| `Button` | Solid Radiant / Electric Edge / Glass / Halo / 白热警示；`Shimmer(true)` 流光边框 |
+| `RepeatButton` | 按住连发，默认 delay 0.40s / interval 0.05s |
+| `ToggleButton` | 按下保持 |
+| `SplitButton` / `DropDownButton` | 主操作 + 菜单；后者整钮弹出 |
+| `HyperlinkButton` | 链接样式 |
+
+### 输入
+
+| 控件 | 说明 |
+| --- | --- |
+| `TextBox` | 单行/多行、选区、剪贴板、撤销重做、聚焦光晕 |
+| `PasswordBox` | 掩码；`Revealable(true)` 明文开关 |
+| `HotkeyBox` | 捕获 Ctrl+K 这类快捷键 |
+| `NumberBox` | 数字过滤、步进、失焦钳制、spin 区 |
+| `AutoSuggestBox` | 建议输入（继承 TextBox） |
+| `ComboBox` | 虚拟化下拉、分组、多选 Chip、Editable、键入跳转 |
+| `DatePicker` / `TimePicker` | `std::chrono` + 系统区域格式弹层 |
+| `CalendarView` | 月历 |
+| `ColorPicker` | 单色亮度盘 |
+| `TokenBox` | Enter / 逗号提交标签 |
+| `Slider` / `RangeSlider` | 单值 / 双拇指区间 |
+| `Form` / `FormField` | 标签、必填、`Validate` 规则，包任意子控件 |
+
+### 选择
+
+| 控件 | 说明 |
+| --- | --- |
+| `CheckBox` / `RadioButton` / `Switch` | 勾选、互斥、开关 |
+| `Segmented` | 分段选择 |
+| `Rating` | 单色星级，部分填充、悬停预览 |
+
+### 布局
+
+| 控件 | 说明 |
+| --- | --- |
+| `Row` / `Column` / `Grid` / `WrapPanel` / `ZStack` / `Spacer` | 堆叠与网格；`Grow` 吃主轴剩余 |
+| `StackPanel` / `Panel` | `CardStyle::Lumen` 聚光卡 |
+| `ScrollViewer` | 裁切视口、覆盖滚动条、焦点滚入视野 |
+| `SplitView` / `Splitter` | 可折叠侧栏 / 拖拽分栏 |
+| `Viewbox` | 子级按自然尺寸排布再缩放 |
+| `SettingsCard` / `Expander` / `GroupBox` | 聚光卡片与带标题分组 |
+
+### 集合
+
+| 控件 | 说明 |
+| --- | --- |
+| `ListView` | 虚拟化列表、多选（Ctrl / Shift / Ctrl+A）、`Bind(ItemsModel)` |
+| `GridView` | 虚拟化图标网格 |
+| `Table` | 虚拟化表头、拖列宽、排序、行内编辑、`Column(title, &T::mem)` |
+| `LogView` | 等宽日志、贴底跟随、Ctrl+C |
+| `TreeView` / `TreeTable` | 虚拟化树；后者第一列是树 |
+| `TabControl` / `Pagination` / `Carousel` | 标签、分页、轮播圆点 |
+
+`Table::SelectedIndex()` 是视图行；绑定回调拿到数据行时用 `SelectedDataIndex()`。`AddColumn(...).CheckBox(get, set).Sortable(true)` 可隐式转回列下标。
+
+### 导航
+
+| 控件 | 说明 |
+| --- | --- |
+| `NavigationView` / `PageHost` | Auto / Expanded / Compact；页面切换走 PageHost |
+| `Breadcrumb` | 面包屑 |
+| `Menu` / `MenuBar` | 子菜单、长列表滚动、快捷键；入场缩放走 DComp Visual |
+| `CommandBar` | 自动溢出 + Toggle |
+| `Stepper` | 步骤条，已完成可回跳 |
+
+### 浮层
+
+| 控件 | 说明 |
+| --- | --- |
+| `Dialog` | 亚克力模糊遮罩 + 外发光模态，页脚按钮可聚焦 |
+| `Flyout` / `TeachingTip` / `ToolTip` | 锚定弹层、带箭头引导、字符串或自定义内容 |
+| `Toast` | `Window::ShowToast`：图标、操作钮、时长、悬停暂停 |
+| `Drawer` | 贴边临时抽屉 |
+| `BusyOverlay` | `Window::ShowBusy` |
+
+### 展示
+
+| 控件 | 说明 |
+| --- | --- |
+| `Label` / `RichLabel` | `TextGlow(true)`；加粗/次要/内联链接混排 |
+| `ProgressBar` / `ProgressRing` | 确定 / 不定态 |
+| `Sparkline` / `Gauge` / `Chart` | 迷你图、240° 仪表、折线/柱/面积/环/热力/雷达/漏斗/子弹 |
+| `Badge` / `Chip` / `InfoBadge` | 标签与角标 |
+| `InfoBar` | 标题/正文/关闭 + `Action` |
+| `Skeleton` / `Avatar` / `EmptyState` | 骨架屏、首字头像、空状态 |
+| `ImageView` / `IconView` | WIC 图；Phosphor 路径图标 |
+| `Separator` / `ColorSwatch` | 分割线；光效强度档位 |
+| `TitleBar` / `StatusBar` | 客户区标题栏；底栏路径/缩放/计数 |
+| `FileDropZone` | 资源管理器拖入文件 |
 
 图标按 Phosphor Regular 路径绘制（`lumen::icon::kSettings` / `kEdit` / `kDownload` 等约 90 个内置字形，默认 16px / weight 1.5）。自定义控件里：
 
