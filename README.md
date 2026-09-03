@@ -1,7 +1,13 @@
 # LUMEN
 
 <p align="center">
-  <img src="docs/cover.jpg" alt="LUMEN Gallery" width="100%">
+  <img src="docs/cover.jpg" alt="LUMEN Gallery Overview">
+</p>
+<p align="center">
+  <img src="docs/cover-collections.jpg" alt="LUMEN Gallery Collections">
+</p>
+<p align="center">
+  <img src="docs/cover-charts.jpg" alt="LUMEN Gallery Charts">
 </p>
 
 高性能 Windows 原生**黑白光感（Monochrome Luminescent）**UI 控件库。纯 C++20，基于 Win32 + Direct3D 11 + Direct2D + DirectWrite + DirectComposition，无第三方依赖（可选接入 LumaText 文字栅格化），仅支持 Windows 10 1903+ / Windows 11。
