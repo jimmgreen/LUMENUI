@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(lumen LANGUAGES CXX RC)
+project(lumen VERSION 0.1.0 LANGUAGES CXX RC)
 
 
 set(CMAKE_CXX_STANDARD 20)
@@ -47,8 +47,12 @@ if(LUMEN_WITH_LUMATEXT)
                 endforeach()
             endif()
         endforeach()
+        # 子目录自带 LumaText 的 install()；SDK 只收 dll + 导入库，不把 LumaText 头文件铺进 prefix。
+        set(_lumen_skip_install "${CMAKE_SKIP_INSTALL_RULES}")
+        set(CMAKE_SKIP_INSTALL_RULES ON)
         add_subdirectory("${LUMATEXT_SOURCE_DIR}"
             "${CMAKE_BINARY_DIR}/_deps/lumatext" EXCLUDE_FROM_ALL)
+        set(CMAKE_SKIP_INSTALL_RULES "${_lumen_skip_install}")
     else()
         find_package(LumaText 0.1 CONFIG QUIET)
     endif()
@@ -355,6 +359,30 @@ configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/lumenConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/lumenConfig.cmake
     INSTALL_DESTINATION ${LUMEN_CMAKE_INSTALL_DIR})
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/lumenConfig.cmake
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/lumenConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/lumenConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/lumenConfigVersion.cmake
     DESTINATION ${LUMEN_CMAKE_INSTALL_DIR})
+
+install(FILES LICENSE DESTINATION .)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdk-readme.txt DESTINATION . RENAME README.txt)
+if(LUMEN_LUMATEXT_RUNTIME_TARGET)
+    install(FILES $<TARGET_FILE:${LUMEN_LUMATEXT_RUNTIME_TARGET}>
+        DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES $<TARGET_LINKER_FILE:${LUMEN_LUMATEXT_RUNTIME_TARGET}>
+        DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+if(LUMATEXT_SOURCE_DIR AND EXISTS "${LUMATEXT_SOURCE_DIR}/LICENSE")
+    install(FILES "${LUMATEXT_SOURCE_DIR}/LICENSE"
+        DESTINATION licenses/LumaText
+        RENAME LumaText.txt)
+    if(EXISTS "${LUMATEXT_SOURCE_DIR}/LICENSES")
+        install(DIRECTORY "${LUMATEXT_SOURCE_DIR}/LICENSES/"
+            DESTINATION licenses/LumaText)
+    endif()
+endif()
 

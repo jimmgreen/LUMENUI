@@ -1,19 +1,33 @@
 @PACKAGE_INIT@
-include("${CMAKE_CURRENT_LIST_DIR}/lumenTargets.cmake")
 # lumen::lumen 带 INTERFACE_COMPILE_FEATURES cxx_std_20。
 # 无窗口入口：链 lumen::main 并实现 int lumen_main(std::span<const std::wstring_view>)。
-# 子目录构建请调用 lumen_copy_runtime(your_exe) 以拷贝 lumatext.dll（见仓库 CMakeLists）。
+# lumen_add_executable / lumen_copy_runtime 会把 bin/lumatext.dll 拷到 exe 旁。
+# LumaText::D2D 必须在 lumenTargets.cmake 之前存在（静态库导出了 $<LINK_ONLY:LumaText::D2D>）。
+
+set(_lumen_lumatext_implib "${PACKAGE_PREFIX_DIR}/lib/lumatext.lib")
+set(_lumen_lumatext_dll "${PACKAGE_PREFIX_DIR}/bin/lumatext.dll")
+if(EXISTS "${_lumen_lumatext_implib}" AND NOT TARGET LumaText::D2D)
+    add_library(lumen::LumaText SHARED IMPORTED)
+    set_target_properties(lumen::LumaText PROPERTIES
+        IMPORTED_IMPLIB "${_lumen_lumatext_implib}"
+        IMPORTED_LOCATION "${_lumen_lumatext_dll}")
+    add_library(LumaText::D2D INTERFACE IMPORTED)
+    set_property(TARGET LumaText::D2D PROPERTY INTERFACE_LINK_LIBRARIES lumen::LumaText)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/lumenTargets.cmake")
 
 function(lumen_copy_runtime target)
-    if(DEFINED lumen_DIR)
-        set(_lumen_bin "${lumen_DIR}/../../../bin")
-        cmake_path(NORMAL_PATH _lumen_bin)
-        if(EXISTS "${_lumen_bin}/lumatext.dll")
-            add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_lumen_bin}/lumatext.dll"
-                    "$<TARGET_FILE_DIR:${target}>")
-        endif()
+    if(NOT DEFINED lumen_DIR)
+        return()
+    endif()
+    set(_lumen_bin "${lumen_DIR}/../../../bin")
+    cmake_path(NORMAL_PATH _lumen_bin)
+    if(EXISTS "${_lumen_bin}/lumatext.dll")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_lumen_bin}/lumatext.dll"
+                "$<TARGET_FILE_DIR:${target}>")
     endif()
 endfunction()
 
