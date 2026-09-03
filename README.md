@@ -1,5 +1,9 @@
 # LUMEN
 
+<p align="center">
+  <img src="docs/cover.jpg" alt="LUMEN Gallery" width="100%">
+</p>
+
 高性能 Windows 原生**黑白光感（Monochrome Luminescent）**UI 控件库。纯 C++20，基于 Win32 + Direct3D 11 + Direct2D + DirectWrite + DirectComposition，无第三方依赖（可选接入 LumaText 文字栅格化），仅支持 Windows 10 1903+ / Windows 11。
 
 ## 设计语言
@@ -9,7 +13,7 @@
 ## 特性
 
 - **调用简单**：控件是带属性和回调的普通对象；`Row`/`Column`/`Grid`/`Grow`/`ScrollViewer` 负责排版，几行代码出界面。
-- **高性能**：D2D 立即模式绘制、纯色/径向/线性渐变画刷与文本布局全缓存（每帧仅突变画刷属性，零堆分配）、动画时钟只在有动画时开启（空闲零 CPU）。基准：1280×800 全帧重绘（8 按钮 + 100,000 行虚拟列表 + 聚光卡）平均 **0.17 ms/帧**。
+- **高性能**：D2D 立即模式绘制、纯色/径向/线性渐变画刷与文本布局全缓存（每帧仅突变画刷属性，零堆分配）、动画时钟只在有动画时开启（空闲零 CPU）。基准：1280×800 全帧重绘（8 按钮 + 100,000 行虚拟列表 + 聚光卡 + 图表面）平均约 **4.8 ms/帧**（预算 < 8 ms）。
 - **按需链接**：每个控件独立编译单元打进静态库，链接器只把实际用到的控件拉进最终 exe。
 - **鼠标聚光**：`Spotlight(true)` 后光斑位置随鼠标当帧跟随；悬停进出渐显；离屏（无窗口）场景直接到位、光斑居中，便于测试。
 - **高 DPI**：Per-Monitor V2 感知，全部布局以 DIP 计算。
@@ -39,7 +43,7 @@ lumen_add_executable(myapp main.cpp app.rc)
 include(FetchContent)
 FetchContent_Declare(lumen
     GIT_REPOSITORY https://github.com/jimmgreen/LUMENUI.git
-    GIT_TAG HEAD)
+    GIT_TAG v0.1.0)
 FetchContent_MakeAvailable(lumen)
 lumen_add_executable(myapp main.cpp app.rc)
 
@@ -192,7 +196,7 @@ window.Confirm(L"删除", L"不可恢复", [](bool yes) { (void)yes; });
 
 所有配置方法与事件注册都返回控件引用，可链式声明到底；基类方法（`ToolTip`/`Enabled`/`Grow` 等）在各控件里都有转发重载，放在链中任意位置都不会截断后续调用：`combo.AddItems({L"A", L"B"}).SelectedIndex(1).Editable(true)`；`Table` 支持列式配置 `table.AddColumn(L"On", 64.0f).CheckBox(get, set).Sortable(true)`（代理可隐式转回列下标）。排序后的 Table 注意双空间：`SelectedIndex()` 是视图行、绑定回调拿到的是数据行，回调里查自家数据用 `SelectedDataIndex()`；菜单弹出用 `menu.PopupTo(control)`，分割按钮用 `split.DropdownMenu(std::move(menu))`，下拉按钮用 `dd.DropdownMenu(std::move(menu))` 一行接好。
 
-Button（Solid Radiant / Electric Edge 流光 / Glass Specular / Halo / 白热警示，`Shimmer(true)` 开启流光边框）、RepeatButton（按住连发，默认 delay 0.40s / interval 0.05s）、CheckBox、RadioButton、Switch、TextBox（单行/多行、选区/剪贴板/撤销重做/聚焦光晕）、PasswordBox（可选明文揭示开关）、HotkeyBox（捕获 Ctrl+K 这类快捷键）、Slider、ProgressBar（确定/不定态）、ProgressRing、Sparkline（折线/柱状/面积迷你图）、Gauge（240° 径向仪表）、ComboBox（可选 Editable 筛选）、AutoSuggestBox（继承 TextBox 的建议输入）、NumberBox（数字过滤/步进/失焦钳制 + spin 区）、DatePicker/TimePicker（`std::chrono` 值 + 系统区域格式弹层）、ImageView（WIC 文件/内存解码 + 缩放/圆角）、CommandBar（自动溢出 + Toggle）、NavigationView（Auto/Expanded/Compact 单层导航）、Menu（子菜单/长列表滚动/快捷键）、Dialog（外发光模态，页脚真按钮可聚焦）、BusyOverlay（`Window::ShowBusy` 窗口忙碌遮罩）、Drawer（贴边临时抽屉）、Flyout（锚定轻弹层，点窗外轻触关闭）、TeachingTip（带箭头的引导气泡，与 Flyout 共用 overlay）、ToolTip（`Control::ToolTip` 字符串或 `std::unique_ptr<ToolTip>` 自定义内容，窗口层 overlay）、Toast（`Window::ShowToast`：图标 / 操作钮 / 时长 / 语义，悬停暂停退场）、ListView（虚拟化列表 + 覆盖滚动条 + 多选：Ctrl+点击/Shift 范围/Ctrl+A + `Bind(ItemsModel)`）、Table（虚拟化表格 + 表头 + 列宽拖动 + 表头点击排序 + 双击单元格行内编辑 + Progress/Icon 列 + `Bind(ItemsModel)`）、LogView（等宽日志、贴底跟随、Ctrl+C）、TreeView（虚拟化层级树：数据回调或 `SetFlatData` 平铺入口 + 展平可见缓存 + ExpandAll）、TreeTable（树形展开 + 多列表头，第一列是树）、Breadcrumb（面包屑导航）、TabControl、Pagination（分页器）、Label（`TextGlow(true)` 文字辉光）、RichLabel（加粗/次要/内联链接混排换行）、Badge/Chip、InfoBadge（导航/标签/图标角标）、TokenBox（Enter/逗号提交标签）、FormField（标签/必填/错误，包任意子控件）、SettingsCard/Expander（聚光卡片，可键盘操作）、GroupBox（带标题轻量分组 + 卡片聚光）、Viewbox（子级按自然尺寸排布再缩放绘制）、SplitView（可折叠侧边栏 + 主内容区）、MenuBar（窗口菜单栏）、StatusBar（窗口底栏：路径/缩放/计数）、DropDownButton（整钮弹出菜单，无主操作分隔）、EmptyState（空状态）、FileDropZone（资源管理器拖入文件）、Carousel（轮播 + 圆点）、Stepper（步骤条，已完成可回跳）、InfoBar（标题/正文/关闭 + `Action` 操作钮，语义靠字形与亮度）、HyperlinkButton、Skeleton（加载骨架屏，呼吸微光）、Rating（单色星级，部分填充/悬停预览）、Avatar（首字头像 + 在线状态点）、Separator、ColorSwatch（可作光效强度档位）、IconView、ScrollViewer（裁切视口 + 覆盖滚动条 + 焦点滚入视野）、Row/Column/Grid/Spacer、StackPanel/Panel（`CardStyle::Lumen` 聚光卡）。
+Button（Solid Radiant / Electric Edge 流光 / Glass Specular / Halo / 白热警示，`Shimmer(true)` 开启流光边框）、RepeatButton（按住连发，默认 delay 0.40s / interval 0.05s）、CheckBox、ToggleButton、RadioButton、Switch、TextBox（单行/多行、选区/剪贴板/撤销重做/聚焦光晕）、PasswordBox（可选明文揭示开关）、HotkeyBox（捕获 Ctrl+K 这类快捷键）、Slider、RangeSlider（双拇指区间）、ProgressBar（确定/不定态）、ProgressRing、Sparkline（折线/柱状/面积迷你图）、Gauge（240° 径向仪表）、Chart（折线/柱/面积/环/热力/雷达/漏斗/子弹）、ComboBox（虚拟化下拉、分组、多选 Chip、可选 Editable 筛选、键入跳转）、AutoSuggestBox（继承 TextBox 的建议输入）、NumberBox（数字过滤/步进/失焦钳制 + spin 区）、DatePicker/TimePicker（`std::chrono` 值 + 系统区域格式弹层）、CalendarView、ColorPicker（单色亮度盘）、ImageView（WIC 文件/内存解码 + 缩放/圆角）、CommandBar（自动溢出 + Toggle）、NavigationView（Auto/Expanded/Compact 单层导航）、Menu（子菜单/长列表滚动/快捷键；入场缩放走 DComp Visual）、Dialog（亚克力模糊遮罩 + 外发光模态，页脚真按钮可聚焦）、BusyOverlay（`Window::ShowBusy` 窗口忙碌遮罩）、Drawer（贴边临时抽屉）、Flyout（锚定轻弹层，点窗外轻触关闭）、TeachingTip（带箭头的引导气泡，与 Flyout 共用 overlay）、ToolTip（`Control::ToolTip` 字符串或 `std::unique_ptr<ToolTip>` 自定义内容，窗口层 overlay）、Toast（`Window::ShowToast`：图标 / 操作钮 / 时长 / 语义，悬停暂停退场）、ListView（虚拟化列表 + 覆盖滚动条 + 多选：Ctrl+点击/Shift 范围/Ctrl+A + `Bind(ItemsModel)`）、GridView（虚拟化图标网格）、Table（虚拟化表格 + 表头 + 列宽拖动 + 表头点击排序 + 双击单元格行内编辑 + Progress/Icon 列 + `Bind(ItemsModel)` / `Column(title, &T::mem)`）、LogView（等宽日志、贴底跟随、Ctrl+C）、TreeView（虚拟化层级树：数据回调或 `SetFlatData` 平铺入口 + 展平可见缓存 + ExpandAll）、TreeTable（树形展开 + 多列表头，第一列是树）、Breadcrumb（面包屑导航）、TabControl、Pagination（分页器）、Label（`TextGlow(true)` 文字辉光）、RichLabel（加粗/次要/内联链接混排换行）、Badge/Chip、InfoBadge（导航/标签/图标角标）、TokenBox（Enter/逗号提交标签）、Form / FormField（标签/必填/`Validate` 规则，包任意子控件）、SettingsCard/Expander（聚光卡片，可键盘操作）、GroupBox（带标题轻量分组 + 卡片聚光）、Viewbox（子级按自然尺寸排布再缩放绘制）、SplitView（可折叠侧边栏 + 主内容区）、Splitter（拖拽分栏）、MenuBar（窗口菜单栏）、StatusBar（窗口底栏：路径/缩放/计数）、DropDownButton（整钮弹出菜单，无主操作分隔）、EmptyState（空状态）、FileDropZone（资源管理器拖入文件）、Carousel（轮播 + 圆点）、Stepper（步骤条，已完成可回跳）、InfoBar（标题/正文/关闭 + `Action` 操作钮，语义靠字形与亮度）、HyperlinkButton、Skeleton（加载骨架屏，呼吸微光）、Rating（单色星级，部分填充/悬停预览）、Avatar（首字头像 + 在线状态点）、Separator、ColorSwatch（可作光效强度档位）、IconView、ScrollViewer（裁切视口 + 覆盖滚动条 + 焦点滚入视野）、Row/Column/Grid/WrapPanel/ZStack/Spacer、StackPanel/Panel（`CardStyle::Lumen` 聚光卡）。
 
 图标按 Phosphor Regular 路径绘制（`lumen::icon::kSettings` / `kEdit` / `kDownload` 等约 90 个内置字形，默认 16px / weight 1.5）。自定义控件里：
 
@@ -226,6 +230,8 @@ tests/perf/          全帧重绘帧耗时基准（含聚光卡压力项）
 ```bat
 build\lumen_visual_test.exe   # 输出 [PASS]/[FAIL]，生成暗色 PNG 快照（含聚光断言）
 build\lumen_perf_test.exe     # 输出平均/最差帧耗时，预算 < 8 ms
+build\lumen_anim_test.exe     # 缓动/补间/弹簧数值断言
+build\lumen_api_test.exe      # 链式 setter + README 代码块编译 + 命名检查
 ```
 
 ## 排障
@@ -238,10 +244,11 @@ build\lumen_perf_test.exe     # 输出平均/最差帧耗时，预算 < 8 ms
 
 ## 路线图
 
-- ~~多行 TextBox、菜单子级与动画~~（已交付：多行 + Undo/Redo；Menu 子菜单/滚动/快捷键；出现动画沿用原有）
+- ~~多行 TextBox、菜单子级与动画~~（已交付：多行 + Undo/Redo；Menu 子菜单/滚动/快捷键；入场缩放/位移走 DComp Visual）
 - ~~部分失效（脏矩形）重绘~~（已交付：D2D 裁剪 + retain `CopyFromBitmap` + `Present1` 脏区；ListView/Table 行命令列表缓存）
-- DComp 动画直通
-- 模态遮罩真高斯模糊（D2D Effects）
+- DComp 动画直通（合成器侧 `IDCompositionAnimation`；菜单入场已把变换交给 DComp Visual，时钟仍跟 `Present`）
+- ~~模态遮罩真高斯模糊~~（已交付：Dialog / Drawer / Busy 捕获下层，`CLSID_D2D1GaussianBlur` + 去饱和，入场 Tween sigma，下层冻结只 blit 缓存）
 - ~~Table 单元格编辑~~（已交付：双击 Text 单元格行内编辑，回车/失焦提交）
 - ~~多选 ListView、列宽拖动与基础排序~~（已交付：ListView Ctrl/Shift/Ctrl+A 多选；Table 表头边界拖宽 + 点击循环排序，`DataRowAt` 视图→数据映射，`RowComparator` 自定义比较）
-- ComboBox 大量项虚拟化、Password 揭示开关
+- ~~ComboBox 大量项虚拟化、Password 揭示开关~~（已交付：下拉只画可见行；`PasswordBox::Revealable`）
+- 预编译 SDK 包（`lumen.lib` + 头文件 + `lumatext.dll`）。当前 Release 只挂 Gallery zip，方便试用，还不能当二进制依赖来链。
