@@ -1,0 +1,8 @@
+{
+  "name": "lumen",
+  "version-string": "0.1.0",
+  "description": "LUMEN Windows monochrome UI library",
+  "homepage": "https://github.com/jimmgreen/LUMENUI",
+  "license": "MIT",
+  "supports": "windows"
+}

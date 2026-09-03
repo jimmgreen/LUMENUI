@@ -2,12 +2,14 @@
 // 布局 LRU + 命令列表表面缓存（子像素相位分桶）+ 按字体族选择级联；
 // 斜体/非正常拉伸/不支持的字体族/任何失败都返回 false，由调用方回退 DirectWrite。
 #include "lumatext_bridge.h"
+#include "text_service.h"
 
 #include <windows.h>
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <list>
 #include <string>
 #include <unordered_map>
@@ -15,16 +17,16 @@
 #include <vector>
 #include <wrl/client.h>
 
-#if defined(FLUENTUI_HAS_LUMATEXT)
+#if defined(LUMEN_HAS_LUMATEXT)
 #include <lumatext/lumatext.hpp>
 #endif
 
-namespace fui {
+namespace lumen {
 namespace {
 
 bool EnvironmentEnabled() noexcept {
     wchar_t value[16]{};
-    const DWORD length = GetEnvironmentVariableW(L"FLUENTUI_LUMATEXT", value, ARRAYSIZE(value));
+    const DWORD length = GetEnvironmentVariableW(L"LUMEN_LUMATEXT", value, ARRAYSIZE(value));
     if (length == 0 || length >= ARRAYSIZE(value)) return true;
     return _wcsicmp(value, L"0") != 0 && _wcsicmp(value, L"off") != 0 &&
            _wcsicmp(value, L"false") != 0;
@@ -37,18 +39,21 @@ std::wstring FontPath(const wchar_t* file_name) {
     return (std::filesystem::path(windows) / L"Fonts" / file_name).wstring();
 }
 
-std::wstring FontFamily(IDWriteTextFormat* format) {
+std::wstring_view FontFamily(IDWriteTextFormat* format) {
     if (!format) return {};
+    static std::unordered_map<IDWriteTextFormat*, std::wstring> cache;
+    if (auto it = cache.find(format); it != cache.end()) return it->second;
     const UINT32 length = format->GetFontFamilyNameLength();
     if (length == 0 || length > 256) return {};
     std::wstring result(length + 1, L'\0');
     if (FAILED(format->GetFontFamilyName(result.data(), length + 1))) return {};
     result.resize(length);
-    return result;
+    auto inserted = cache.emplace(format, std::move(result));
+    return inserted.first->second;
 }
 
-bool Contains(const std::wstring& value, const wchar_t* fragment) {
-    return value.find(fragment) != std::wstring::npos;
+bool Contains(std::wstring_view value, const wchar_t* fragment) {
+    return value.find(fragment) != std::wstring_view::npos;
 }
 
 // 正文墨迹外扩的保守估计：用于判断是否需要重建带省略号的布局。
@@ -59,9 +64,10 @@ constexpr float kInkPad = 2.0f;
 struct LumaTextBridge::Impl {
     LumaTextStats stats;
 
-#if defined(FLUENTUI_HAS_LUMATEXT)
+#if defined(LUMEN_HAS_LUMATEXT)
     struct LayoutKey {
-        std::wstring text;
+        std::uint64_t text_hash = 0;
+        std::uint32_t text_len = 0;
         std::uint32_t family = 0;
         std::uint16_t weight = 400;
         std::int32_t size_64 = 0;
@@ -74,10 +80,11 @@ struct LumaTextBridge::Impl {
 
     struct LayoutKeyHash {
         size_t operator()(const LayoutKey& key) const noexcept {
-            size_t value = std::hash<std::wstring>{}(key.text);
+            size_t value = std::hash<std::uint64_t>{}(key.text_hash);
             const auto combine = [&value](size_t next) {
                 value ^= next + 0x9e3779b9u + (value << 6) + (value >> 2);
             };
+            combine(std::hash<std::uint32_t>{}(key.text_len));
             combine(std::hash<std::uint32_t>{}(key.family));
             combine(std::hash<std::uint16_t>{}(key.weight));
             combine(std::hash<std::int32_t>{}(key.size_64));
@@ -133,6 +140,7 @@ struct LumaTextBridge::Impl {
     struct LayoutSlot {
         LumaText::TextLayout layout;
         std::list<LayoutKey>::iterator lru;
+        std::wstring text;
     };
 
     LumaText::Context context;
@@ -143,6 +151,7 @@ struct LumaTextBridge::Impl {
     LumaText::FontFace segoe_regular;
     LumaText::FontFace segoe_bold;
     LumaText::FontFace icons_face;
+    LumaText::FontFace emoji_face;
     LumaText::FontCascade yahei_cascade;
     LumaText::FontCascade segoe_cascade;
     LumaText::FontCascade icons_cascade;
@@ -265,7 +274,7 @@ struct LumaTextBridge::Impl {
         layout_lru.pop_back();
     }
 
-    void FillLayoutDesc(lt_text_layout_desc& desc, const LayoutKey& key,
+    void FillLayoutDesc(lt_text_layout_desc& desc, const LayoutKey& key, std::wstring_view text,
                         lt_text_style& style, float font_size,
                         LumaText::FontCascade& cascade) const {
         style = LumaText::Descriptor<lt_text_style>();
@@ -273,8 +282,8 @@ struct LumaTextBridge::Impl {
         style.font_size = font_size;
         style.weight = key.weight;
         desc = LumaText::Descriptor<lt_text_layout_desc>();
-        desc.text = key.text.data();
-        desc.text_length = static_cast<std::uint32_t>(key.text.size());
+        desc.text = text.data();
+        desc.text_length = static_cast<std::uint32_t>(text.size());
         desc.base_style = style;
         desc.locale = key.family == kYaHei ? "zh-CN" : "en-US";
         desc.direction = LT_TEXT_DIRECTION_AUTO;
@@ -285,6 +294,53 @@ struct LumaTextBridge::Impl {
         desc.ellipsis = key.ellipsis;
         desc.max_width = key.width_64 / 64.0f;
     }
+
+    LayoutKey MakeLayoutKey(std::wstring_view text, std::uint32_t family, IDWriteTextFormat* format,
+                            std::int32_t width_64, DWRITE_TEXT_ALIGNMENT alignment,
+                            lt_text_ellipsis ellipsis) const {
+        LayoutKey key;
+        key.text_hash = std::hash<std::wstring_view>{}(text);
+        key.text_len = static_cast<std::uint32_t>(text.size());
+        key.family = family;
+        key.weight = static_cast<std::uint16_t>(
+            std::clamp<int>(static_cast<int>(format->GetFontWeight()), 1, 1000));
+        key.size_64 = 0;
+        key.width_64 = width_64;
+        key.alignment = alignment;
+        key.ellipsis = ellipsis;
+        return key;
+    }
+
+    LumaText::TextLayout* GetLayout(const LayoutKey& key, std::wstring_view text, float font_size,
+                                    LumaText::FontCascade& cascade) {
+        if (auto found = layouts.find(key); found != layouts.end()) {
+            if (found->second.text == text) {
+                layout_lru.splice(layout_lru.begin(), layout_lru, found->second.lru);
+                found->second.lru = layout_lru.begin();
+                return &found->second.layout;
+            }
+        }
+        lt_text_style style{};
+        lt_text_layout_desc desc{};
+        FillLayoutDesc(desc, key, text, style, font_size, cascade);
+
+        LumaText::TextLayout layout;
+        if (lt_text_layout_create(context.get(), &desc, layout.put()) != LT_OK) return nullptr;
+        while (layouts.size() >= kLayoutCacheLimit) EvictOldestLayout();
+        layout_lru.push_front(key);
+        const auto inserted = layouts.emplace(
+            key, LayoutSlot{std::move(layout), layout_lru.begin(), std::wstring(text)});
+        if (!inserted.second) {
+            // 哈希碰撞且文本不同：不覆盖已有槽，用本次临时布局。
+            layout_lru.pop_front();
+            scratch_layout = std::move(layout);
+            return &scratch_layout;
+        }
+        return &inserted.first->second.layout;
+    }
+
+    LumaText::TextLayout scratch_layout;
+    std::unordered_map<std::uint64_t, float> glyph_advance;
 
     bool Init(IDWriteFactory* dwrite, ID2D1RenderTarget* target) {
         auto context_desc = LumaText::Descriptor<lt_context_desc>();
@@ -333,6 +389,9 @@ struct LumaTextBridge::Impl {
         PushFace(yahei_entries, yahei_regular, 400);
         PushFace(yahei_entries, yahei_bold, 600);
         PushFace(yahei_entries, yahei_bold, 700);
+        // Segoe UI Emoji 垫底：彩色 COLR run 由 LumaText 内部回退 DirectWrite，正文仍走 YaHei。
+        MakeFace(FontPath(L"seguiemj.ttf"), emoji_face);
+        PushFace(yahei_entries, emoji_face, 400);
         if (yahei_entries.empty() || !MakeCascade(yahei_entries, yahei_cascade)) return false;
 
         std::vector<lt_font_cascade_entry> segoe_entries;
@@ -342,6 +401,7 @@ struct LumaTextBridge::Impl {
         // Segoe 级联尾部附加 YaHei，保证中英混排不缺字。
         PushFace(segoe_entries, yahei_regular, 400);
         PushFace(segoe_entries, yahei_bold, 700);
+        PushFace(segoe_entries, emoji_face, 400);
         if (segoe_entries.empty() || !MakeCascade(segoe_entries, segoe_cascade)) return false;
 
         // 图标字形（Segoe Fluent Icons / Segoe MDL2 Assets 同码位），使图标
@@ -377,6 +437,7 @@ struct LumaTextBridge::Impl {
         segoe_cascade.reset();
         yahei_cascade.reset();
         icons_face.reset();
+        emoji_face.reset();
         segoe_bold.reset();
         segoe_regular.reset();
         yahei_bold.reset();
@@ -386,26 +447,6 @@ struct LumaTextBridge::Impl {
         recording_dc.Reset();
         target_dc.Reset();
         context.reset();
-    }
-
-    LumaText::TextLayout* GetLayout(const LayoutKey& key, float font_size,
-                                    LumaText::FontCascade& cascade) {
-        if (auto found = layouts.find(key); found != layouts.end()) {
-            layout_lru.splice(layout_lru.begin(), layout_lru, found->second.lru);
-            found->second.lru = layout_lru.begin();
-            return &found->second.layout;
-        }
-        lt_text_style style{};
-        lt_text_layout_desc desc{};
-        FillLayoutDesc(desc, key, style, font_size, cascade);
-
-        LumaText::TextLayout layout;
-        if (lt_text_layout_create(context.get(), &desc, layout.put()) != LT_OK) return nullptr;
-        while (layouts.size() >= kLayoutCacheLimit) EvictOldestLayout();
-        layout_lru.push_front(key);
-        const auto inserted =
-            layouts.emplace(key, LayoutSlot{std::move(layout), layout_lru.begin()});
-        return &inserted.first->second.layout;
     }
 
     static bool ContainsCjk(std::wstring_view text) noexcept {
@@ -418,10 +459,17 @@ struct LumaTextBridge::Impl {
         return false;
     }
 
+    static bool ContainsAscii(std::wstring_view text) noexcept {
+        for (const wchar_t c : text) {
+            if (c >= 0x20 && c <= 0x7E) return true;
+        }
+        return false;
+    }
+
     bool ResolveCascade(IDWriteTextFormat* format, std::wstring_view text,
                         std::uint32_t& family, LumaText::FontCascade*& cascade) {
         if (!format) return false;
-        const std::wstring family_name = FontFamily(format);
+        const std::wstring_view family_name = FontFamily(format);
         const bool icon_font = Contains(family_name, L"Icons") ||
                                Contains(family_name, L"MDL2") ||
                                Contains(family_name, L"Assets");
@@ -435,8 +483,9 @@ struct LumaTextBridge::Impl {
         const bool segoe_text = Contains(family_name, L"Segoe UI") &&
                                 !Contains(family_name, L"Emoji");
         if (!yahei && !segoe_text) return false;
-        // 中文内容始终优先 YaHei 级联，与 DirectWrite family 无关。
-        if (ContainsCjk(text) && yahei_cascade.get()) {
+        // 纯中文走 YaHei。ASCII+CJK 混排必须 Segoe 优先（级联尾部已垫 YaHei）：
+        // 否则拉丁按 YaHei 宽度、绘制回退 Segoe，插入符会落到字形右侧很远。
+        if (ContainsCjk(text) && yahei_cascade.get() && !ContainsAscii(text)) {
             family = kYaHei;
             cascade = &yahei_cascade;
             return true;
@@ -476,15 +525,10 @@ struct LumaTextBridge::Impl {
         LumaText::FontCascade* cascade = nullptr;
         if (!ResolveCascade(format, text, family, cascade) || !cascade) return false;
 
-        LayoutKey key;
-        key.text.assign(text);
-        key.family = family;
-        key.weight = static_cast<std::uint16_t>(
-            std::clamp<int>(static_cast<int>(format->GetFontWeight()), 1, 1000));
+        LayoutKey key = MakeLayoutKey(text, family, format, kUnboundedWidth64,
+                                      DWRITE_TEXT_ALIGNMENT_LEADING, LT_TEXT_ELLIPSIS_NONE);
         key.size_64 = static_cast<std::int32_t>(std::lround(font_size * 64.0f));
-        key.width_64 = kUnboundedWidth64;
-        key.alignment = DWRITE_TEXT_ALIGNMENT_LEADING;
-        LumaText::TextLayout* layout = GetLayout(key, font_size, *cascade);
+        LumaText::TextLayout* layout = GetLayout(key, text, font_size, *cascade);
         if (!layout || !*layout) return false;
 
         auto metrics = LumaText::Descriptor<lt_text_metrics>();
@@ -495,7 +539,7 @@ struct LumaTextBridge::Impl {
             key.width_64 = static_cast<std::int32_t>(
                 std::lround(std::max(1.0f, width - kInkPad) * 64.0f));
             key.ellipsis = LT_TEXT_ELLIPSIS_END;
-            layout = GetLayout(key, font_size, *cascade);
+            layout = GetLayout(key, text, font_size, *cascade);
             if (!layout || !*layout) return false;
             if (lt_text_layout_get_metrics(layout->get(), &metrics) != LT_OK) return false;
         }
@@ -572,6 +616,9 @@ struct LumaTextBridge::Impl {
             draw.origin_x += std::max(0.0f, width - metrics.width);
         }
         draw.origin_y = cached_phase_y + (height - metrics.height) * 0.5f;
+        if (family == kYaHei) {
+            draw.origin_y -= lumen::UiText().CjkBaselineNudge(format->GetFontSize()) * scale;
+        }
         draw.clip = {cached_phase_x, cached_phase_y, cached_phase_x + width,
                      cached_phase_y + height};
         draw.clip_enabled = true;
@@ -630,20 +677,92 @@ struct LumaTextBridge::Impl {
         if (!ResolveCascade(format, text, family, cascade) || !cascade) return false;
         const float font_size = format->GetFontSize();
         if (!(font_size > 0.0f)) return false;
-        LayoutKey key;
-        key.text.assign(text);
-        key.family = family;
-        key.weight = static_cast<std::uint16_t>(
-            std::clamp<int>(static_cast<int>(format->GetFontWeight()), 1, 1000));
+        LayoutKey key = MakeLayoutKey(text, family, format, kUnboundedWidth64,
+                                      DWRITE_TEXT_ALIGNMENT_LEADING, LT_TEXT_ELLIPSIS_NONE);
         key.size_64 = static_cast<std::int32_t>(std::lround(font_size * 64.0f));
-        key.width_64 = kUnboundedWidth64;
-        key.alignment = DWRITE_TEXT_ALIGNMENT_LEADING;
-        LumaText::TextLayout* layout = GetLayout(key, font_size, *cascade);
+        if (text.size() == 1) {
+            const std::uint64_t gk = (static_cast<std::uint64_t>(key.size_64) << 32) ^
+                                     key.text_hash ^ family;
+            if (auto it = glyph_advance.find(gk); it != glyph_advance.end()) {
+                width = it->second;
+                if (height) *height = font_size * 1.25f;
+                return true;
+            }
+        }
+        LumaText::TextLayout* layout = GetLayout(key, text, font_size, *cascade);
         if (!layout || !*layout) return false;
         auto metrics = LumaText::Descriptor<lt_text_metrics>();
         if (lt_text_layout_get_metrics(layout->get(), &metrics) != LT_OK) return false;
         width = metrics.width;
         if (height) *height = metrics.height;
+        if (text.size() == 1) {
+            const std::uint64_t gk = (static_cast<std::uint64_t>(key.size_64) << 32) ^
+                                     key.text_hash ^ family;
+            glyph_advance.emplace(gk, width);
+        }
+        return true;
+    }
+
+    LumaText::TextLayout* LayoutForDraw(std::wstring_view text, IDWriteTextFormat* format,
+                                        float scale) {
+        if (!format || text.empty() || !(scale > 0.0f)) return nullptr;
+        std::uint32_t family = 0;
+        LumaText::FontCascade* cascade = nullptr;
+        if (!ResolveCascade(format, text, family, cascade) || !cascade) return nullptr;
+        const float font_size = format->GetFontSize() * scale;
+        if (!(font_size > 0.0f)) return nullptr;
+        LayoutKey key = MakeLayoutKey(text, family, format, kUnboundedWidth64,
+                                      DWRITE_TEXT_ALIGNMENT_LEADING, LT_TEXT_ELLIPSIS_NONE);
+        key.size_64 = static_cast<std::int32_t>(std::lround(font_size * 64.0f));
+        return GetLayout(key, text, font_size, *cascade);
+    }
+
+    bool HitTestPoint(std::wstring_view text, IDWriteTextFormat* format, float scale,
+                      float x_dip, size_t* caret_index) {
+        if (!caret_index) return false;
+        *caret_index = 0;
+        if (text.empty()) return true;
+        LumaText::TextLayout* layout = LayoutForDraw(text, format, scale);
+        if (!layout || !*layout) return false;
+        auto line = LumaText::Descriptor<lt_text_metrics>();
+        if (lt_text_layout_get_metrics(layout->get(), &line) != LT_OK) return false;
+        auto hit = LumaText::Descriptor<lt_hit_test_metrics>();
+        const float y = std::max(line.height * 0.5f, 0.5f);
+        if (lt_text_layout_hit_test_point(layout->get(), x_dip * scale, y, &hit) != LT_OK) {
+            return false;
+        }
+        const size_t index = static_cast<size_t>(hit.text_position) +
+                             (hit.is_trailing ? static_cast<size_t>(hit.text_length) : 0);
+        *caret_index = std::min(index, text.size());
+        return true;
+    }
+
+    bool PositionToX(std::wstring_view text, IDWriteTextFormat* format, float scale,
+                     size_t caret_index, float* x_dip) {
+        if (!x_dip) return false;
+        *x_dip = 0.0f;
+        if (text.empty()) return true;
+        if (!(scale > 0.0f)) return false;
+        LumaText::TextLayout* layout = LayoutForDraw(text, format, scale);
+        if (!layout || !*layout) return false;
+        auto metrics = LumaText::Descriptor<lt_text_metrics>();
+        if (lt_text_layout_get_metrics(layout->get(), &metrics) != LT_OK) return false;
+        // LayoutForDraw 与绘制同字号（物理像素），命中坐标除以 scale 才是 DIP。
+        const float width_dip = metrics.width / scale;
+        // pos == length 落不到任何 cluster（半开区间）；LumaText 会退到
+        // clusters.back()。按视觉 left 排序后末项可能是剩余行盒，CJK 插入符会被
+        // 推到无界 max_width。行尾一律用步进宽。
+        if (caret_index >= text.size()) {
+            *x_dip = width_dip;
+            return true;
+        }
+        float x_px = 0.0f, y_px = 0.0f;
+        auto hit = LumaText::Descriptor<lt_hit_test_metrics>();
+        if (lt_text_layout_hit_test_position(layout->get(), static_cast<uint32_t>(caret_index),
+                                             false, &x_px, &y_px, &hit) != LT_OK) {
+            return false;
+        }
+        *x_dip = Clamp(x_px / scale, 0.0f, width_dip);
         return true;
     }
 #else
@@ -696,6 +815,34 @@ bool LumaTextBridge::Measure(std::wstring_view text, IDWriteTextFormat* format, 
     return impl_ && impl_->Measure(text, format, width, height);
 }
 
+bool LumaTextBridge::HitTestPoint(std::wstring_view text, IDWriteTextFormat* format, float scale,
+                                  float x_dip, size_t* caret_index) {
+#if defined(LUMEN_HAS_LUMATEXT)
+    return impl_ && impl_->HitTestPoint(text, format, scale, x_dip, caret_index);
+#else
+    (void)text;
+    (void)format;
+    (void)scale;
+    (void)x_dip;
+    (void)caret_index;
+    return false;
+#endif
+}
+
+bool LumaTextBridge::PositionToX(std::wstring_view text, IDWriteTextFormat* format, float scale,
+                                 size_t caret_index, float* x_dip) {
+#if defined(LUMEN_HAS_LUMATEXT)
+    return impl_ && impl_->PositionToX(text, format, scale, caret_index, x_dip);
+#else
+    (void)text;
+    (void)format;
+    (void)scale;
+    (void)caret_index;
+    (void)x_dip;
+    return false;
+#endif
+}
+
 const LumaTextStats& LumaTextBridge::Stats() const noexcept {
     static const LumaTextStats empty{};
     return impl_ ? impl_->stats : empty;
@@ -705,4 +852,4 @@ void LumaTextBridge::RecordFallback() noexcept {
     if (impl_) impl_->stats.fallback_draws++;
 }
 
-} // namespace fui
+} // namespace lumen

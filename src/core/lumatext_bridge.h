@@ -9,7 +9,7 @@
 #include <memory>
 #include <string_view>
 
-namespace fui {
+namespace lumen {
 
 struct LumaTextStats {
     std::uint64_t draw_calls = 0;
@@ -41,6 +41,11 @@ public:
               DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
     bool Measure(std::wstring_view text, IDWriteTextFormat* format,
                  float& width, float* height = nullptr);
+    // 与 Draw 同一套布局（物理字号）。坐标为 DIP；失败时调用方回退 DirectWrite。
+    bool HitTestPoint(std::wstring_view text, IDWriteTextFormat* format, float scale,
+                      float x_dip, size_t* caret_index);
+    bool PositionToX(std::wstring_view text, IDWriteTextFormat* format, float scale,
+                     size_t caret_index, float* x_dip);
 
     const LumaTextStats& Stats() const noexcept;
     void RecordFallback() noexcept;
@@ -50,4 +55,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace fui
+} // namespace lumen

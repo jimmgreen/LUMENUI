@@ -1,28 +1,27 @@
-#include "fluentui/RadioButton.h"
-#include "fluentui/Panel.h"
-#include "fluentui/Painter.h"
+#include "lumen/RadioButton.h"
+#include "lumen/Panel.h"
+#include "lumen/Painter.h"
 #include "../core/text_service.h"
 
-namespace fui {
+namespace lumen {
 namespace {
 constexpr float kCircleSize = 20.0f;
-constexpr float kGap = 8.0f;
-
-Color Rgba(uint32_t rgb, float alpha) { return Color::Hex(rgb, alpha); }
+constexpr float kGap = 12.0f;
 
 } // namespace
 
 void RadioButton::RelayoutParent() { Control::RelayoutParent(); }
 
-void RadioButton::SetChecked(bool value) {
-    if (checked_ == value) return;
+RadioButton& RadioButton::Checked(bool value) {
+    if (checked_ == value) return *this;
     checked_ = value;
     Invalidate();
+    return *this;
 }
 
 Size RadioButton::Measure(Size, const Theme&) {
     const float width = text_.empty() ? kCircleSize : kCircleSize + kGap +
-                        UiText().MeasureText(text_, TextRole::Body).w;
+                        MeasureText(text_, TextRole::Body).w;
     return {width, 28.0f};
 }
 
@@ -32,52 +31,40 @@ void RadioButton::Draw(Painter& painter, const Theme& theme) {
     const float outer_radius = kCircleSize * 0.5f;
 
     if (checked_) {
-        // 选中：accent 粗环（5px，悬停且未按下时 4px），内部填主题底色
-        float thickness = hovered_ && !pressed_ ? 4.0f : 5.0f;
-        Color border = theme.accent;
-        Color fill = theme.dark ? Color::Hex(0x000000) : Color::Hex(0xFFFFFF);
-        if (!enabled_) {
-            thickness = 5.0f;
-            border = theme.dark ? Rgba(0xFFFFFF, 40.0f / 255.0f) : Rgba(0x000000, 55.0f / 255.0f);
-        }
+        const Color fill = enabled_ ? theme.bg : theme.fill_input_disabled;
+        const Color border = enabled_ ? theme.accent
+                                       : Color{theme.accent.r, theme.accent.g, theme.accent.b,
+                                               0.16f * theme.glow_intensity};
+        if (enabled_) painter.DrawGlow(circle, outer_radius, theme.glow_sm);
         painter.FillRoundedRect(circle, outer_radius, fill);
-        painter.StrokeRoundedRect(circle, outer_radius, border, thickness);
+        painter.StrokeRoundedRect(circle, outer_radius, border, 1.0f);
+        const float dot = 10.0f;
+        const Rect inner{circle.x + (kCircleSize - dot) * 0.5f,
+                         circle.y + (kCircleSize - dot) * 0.5f, dot, dot};
+        painter.FillRoundedRect(inner, dot * 0.5f, enabled_ ? theme.accent : theme.text_disabled);
     } else {
-        const float thickness = 1.0f;
-        Color border = theme.dark ? Rgba(0xFFFFFF, 153.0f / 255.0f) : Rgba(0x000000, 153.0f / 255.0f);
-        Color fill = theme.dark ? Rgba(0x000000, 26.0f / 255.0f) : Rgba(0x000000, 6.0f / 255.0f);
-        if (enabled_) {
-            if (hovered_) {
-                fill = theme.dark ? Rgba(0xFFFFFF, 11.0f / 255.0f) : Rgba(0x000000, 15.0f / 255.0f);
-            }
-            if (pressed_) {
-                border = theme.dark ? Rgba(0xFFFFFF, 40.0f / 255.0f) : Rgba(0x000000, 55.0f / 255.0f);
-                fill = theme.dark ? Color::Hex(0x000000) : Color::Hex(0xFFFFFF);
-            }
-        } else {
-            border = theme.dark ? Rgba(0xFFFFFF, 41.0f / 255.0f) : Rgba(0x000000, 55.0f / 255.0f);
-            fill = Color{0, 0, 0, 0};
-        }
-        painter.FillRoundedRect(circle, outer_radius, fill);
-        painter.StrokeRoundedRect(circle, outer_radius, border, thickness);
-        // 按下时的额外按压圈：r=7、线宽 4
-        if (pressed_ && enabled_) {
-            const Rect press_ring{circle.x + 3.0f, circle.y + 3.0f, 14.0f, 14.0f};
-            painter.StrokeRoundedRect(
-                press_ring, 7.0f,
-                theme.dark ? Rgba(0xFFFFFF, 40.0f / 255.0f) : Rgba(0x000000, 24.0f / 255.0f),
-                4.0f);
+        const Color border =
+            Color{theme.accent.r, theme.accent.g, theme.accent.b,
+                  (enabled_ ? (hovered_ ? 0.60f : 0.30f) : 0.16f) * theme.glow_intensity};
+        painter.FillRoundedRect(circle, outer_radius, theme.bg);
+        painter.StrokeRoundedRect(circle, outer_radius, border, 1.0f);
+        if (enabled_ && hovered_) {
+            Color hover_glow = theme.glow_sm;
+            hover_glow.a *= 0.40f;
+            painter.DrawGlow(circle, outer_radius, hover_glow);
         }
     }
     if (focused_ && enabled_) {
-        painter.DrawFocusRing(circle, outer_radius, theme.accent, theme.focus_ring_width);
+        PaintFocusRing(painter, theme, circle, outer_radius);
     }
 
     if (!text_.empty()) {
+        const Color label = enabled_ ? (checked_ ? theme.text : theme.text_secondary)
+                                     : theme.text_disabled;
         painter.DrawText(text_,
                          {absolute_.x + kCircleSize + kGap, absolute_.y,
-                          UiText().MeasureText(text_, TextRole::Body).w + 2.0f, absolute_.h},
-                         TextRole::Body, enabled_ ? theme.text : theme.text_disabled);
+                          MeasureText(text_, TextRole::Body).w, absolute_.h},
+                         TextRole::Body, label);
     }
 }
 
@@ -103,7 +90,7 @@ void RadioButton::OnMouseUp(Point local, uint32_t buttons) {
         return;
     if (checked_) return;
     SelectExclusive();
-    if (toggled_) toggled_();
+    toggled_.Emit(true);
     Invalidate();
 }
 
@@ -112,7 +99,7 @@ bool RadioButton::OnKey(uint32_t vk) {
     if (vk == VK_SPACE) {
         if (!checked_) {
             SelectExclusive();
-            if (toggled_) toggled_();
+            toggled_.Emit(true);
             Invalidate();
         }
         return true;
@@ -120,4 +107,4 @@ bool RadioButton::OnKey(uint32_t vk) {
     return false;
 }
 
-} // namespace fui
+} // namespace lumen

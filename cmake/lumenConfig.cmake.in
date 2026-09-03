@@ -1,0 +1,30 @@
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/lumenTargets.cmake")
+# lumen::lumen 带 INTERFACE_COMPILE_FEATURES cxx_std_20。
+# 无窗口入口：链 lumen::main 并实现 int lumen_main(std::span<const std::wstring_view>)。
+# 子目录构建请调用 lumen_copy_runtime(your_exe) 以拷贝 lumatext.dll（见仓库 CMakeLists）。
+
+function(lumen_copy_runtime target)
+    if(DEFINED lumen_DIR)
+        set(_lumen_bin "${lumen_DIR}/../../../bin")
+        cmake_path(NORMAL_PATH _lumen_bin)
+        if(EXISTS "${_lumen_bin}/lumatext.dll")
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_lumen_bin}/lumatext.dll"
+                    "$<TARGET_FILE_DIR:${target}>")
+        endif()
+    endif()
+endfunction()
+
+function(lumen_add_executable name)
+    add_executable(${name} WIN32 ${ARGN})
+    target_link_libraries(${name} PRIVATE lumen::lumen lumen::main)
+    lumen_copy_runtime(${name})
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /utf-8 /permissive-)
+        target_compile_definitions(${name} PRIVATE NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
+    endif()
+endfunction()
+
+check_required_components(lumen)

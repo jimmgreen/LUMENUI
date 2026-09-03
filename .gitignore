@@ -2,6 +2,7 @@ build/
 build-*/
 out/
 .vs/
+.zcode/
 *.user
 *.png
 !docs/**/*.png
