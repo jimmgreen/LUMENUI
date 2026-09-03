@@ -6,3 +6,4 @@ out/
 *.user
 *.png
 !docs/**/*.png
+!docs/**/*.jpg
