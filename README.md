@@ -14,6 +14,10 @@
 - **鼠标聚光**：`Spotlight(true)` 后光斑位置随鼠标当帧跟随；悬停进出渐显；离屏（无窗口）场景直接到位、光斑居中，便于测试。
 - **高 DPI**：Per-Monitor V2 感知，全部布局以 DIP 计算。
 
+## 试用
+
+不编译也能看效果：从 [Releases](https://github.com/jimmgreen/LUMENUI/releases/latest) 下载 `lumen-gallery-windows-x64.zip`，解压后运行 `lumen_gallery.exe`（Windows 10 1903+ / Windows 11，x64）。包内已带 `lumatext.dll` 与 VC 运行库。
+
 ## 构建
 
 需要 MSVC（VS 2022+）、CMake 3.25+、Ninja：
