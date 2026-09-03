@@ -28,6 +28,8 @@
 
 不编译也能看效果：从 [Releases](https://github.com/jimmgreen/LUMENUI/releases/latest) 下载 `lumen-gallery-windows-x64.zip`，解压后运行 `lumen_gallery.exe`（Windows 10 1903+ / Windows 11，x64）。包内已带 `lumatext.dll` 与 VC 运行库。
 
+写自己的程序不想编库：同一页下载 `lumen-sdk-windows-x64.zip`（`lumen.lib` + 头文件 + `lumatext.dll`），解压后 `find_package(lumen CONFIG)`。
+
 ## 构建
 
 需要 MSVC（VS 2022+）、CMake 3.25+、Ninja：
@@ -53,7 +55,8 @@ FetchContent_Declare(lumen
 FetchContent_MakeAvailable(lumen)
 lumen_add_executable(myapp main.cpp app.rc)
 
-# 3) 安装后 find_package
+# 3) 预编译 SDK（Releases 里的 lumen-sdk-windows-x64.zip）
+set(lumen_DIR "C:/libs/lumen-sdk-windows-x64/lib/cmake/lumen")
 find_package(lumen CONFIG REQUIRED)
 lumen_add_executable(myapp main.cpp app.rc)
 ```
@@ -257,4 +260,4 @@ build\lumen_api_test.exe      # 链式 setter + README 代码块编译 + 命名�
 - ~~Table 单元格编辑~~（已交付：双击 Text 单元格行内编辑，回车/失焦提交）
 - ~~多选 ListView、列宽拖动与基础排序~~（已交付：ListView Ctrl/Shift/Ctrl+A 多选；Table 表头边界拖宽 + 点击循环排序，`DataRowAt` 视图→数据映射，`RowComparator` 自定义比较）
 - ~~ComboBox 大量项虚拟化、Password 揭示开关~~（已交付：下拉只画可见行；`PasswordBox::Revealable`）
-- 预编译 SDK 包（`lumen.lib` + 头文件 + `lumatext.dll`）。当前 Release 只挂 Gallery zip，方便试用，还不能当二进制依赖来链。
+- ~~预编译 SDK 包~~（已交付：Release 挂 `lumen-sdk-windows-x64.zip`：`lib/lumen.lib` `lumen_main.lib` `lumatext.lib` + `include/lumen/` + `bin/lumatext.dll` + CMake config）
