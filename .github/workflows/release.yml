@@ -63,7 +63,8 @@ jobs:
           Copy-Item build/lumatext.dll $gallery/
           if (Test-Path build/licenses) { Copy-Item build/licenses $gallery -Recurse }
           else { Copy-Item dist/sdk/licenses $gallery -Recurse }
-          $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory |
+          # runner 镜像可能是 VS2022 或 VS2026（"18"），按年号通配取最新一份 CRT。
+          $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory |
             Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $crt) { throw "VC redist CRT directory not found" }
           Copy-Item "$($crt.FullName)/*.dll" $gallery/
