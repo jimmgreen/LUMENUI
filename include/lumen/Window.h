@@ -156,6 +156,11 @@ struct WindowSpec {
     void* owner = nullptr;
     // 非空：按该 HWND 的 DPI 感知上下文建窗（供 SetParent 嵌入；避免 ERROR_INVALID_STATE）。
     void* matchDpiHwnd = nullptr;
+    // 非空：直接创建 WS_CHILD，DPI 匹配父窗；NativeHandle 始终返回此子窗。
+    void* parent = nullptr;
+    // 嵌入时可指定外壳：Client 标题栏动作与 Resize 路由此外壳，外壳负责布局、关闭与阴影。
+    // 外壳 WM_GETMINMAXINFO 转发给子窗以应用 MinSize；键盘预处理须让子窗及其 IME 消息通过。
+    void* frameTarget = nullptr;
 };
 
 class Window {

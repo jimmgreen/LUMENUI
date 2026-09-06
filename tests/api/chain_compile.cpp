@@ -51,12 +51,14 @@ void PumpOnce() {
     lumen::App::LumaTextLibrary(L"C:\\plugin\\lumatext.dll");
     (void)lumen::App::AddFont(std::span<const std::byte>{});
     (void)lumen::App::AddFont(L"C:\\plugin\\SJQY.ttf");
-    lumen::WindowSpec spec{.title = L"host", .size = {480.0f, 380.0f}, .owner = nullptr};
+    lumen::WindowSpec spec{.title = L"host", .size = {480.0f, 380.0f}, .owner = nullptr, .parent = nullptr, .frameTarget = nullptr};
     lumen::Column host;
     host.Add<lumen::Label>(L"C").FontFamily(L"SJQY").Role(lumen::TextRole::Body);
     host.Add<lumen::CheckBox>(L"C").Role(lumen::TextRole::Caption);
     host.Add<lumen::RichLabel>().Font(L"C", L"SJQY").Add(L"12@200");
     host.Add<lumen::Table>().CellCharacterFont(L"ABCD", L"SJQY");
+    static_assert(noexcept(lumen::App::HasActiveCallbacks()));
+    (void)lumen::App::HasActiveCallbacks();
     (void)lumen::App::CanShutdown();
     lumen::App::Shutdown();
 }

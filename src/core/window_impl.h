@@ -46,7 +46,8 @@ class MenuBar;
 class WindowImpl {
 public:
     WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame,
-               HWND owner = nullptr, bool title_bar = true, HWND match_dpi_hwnd = nullptr);
+               HWND owner = nullptr, bool title_bar = true, HWND match_dpi_hwnd = nullptr,
+               HWND parent = nullptr, HWND frame_target = nullptr);
     ~WindowImpl();
 
     // 控件基类经 Window API 转发的内部通道。
@@ -276,6 +277,9 @@ private:
 
     Window* api_;
     HWND hwnd_ = nullptr;
+    HWND parent_ = nullptr;
+    HWND frame_target_ = nullptr;
+    HWND FrameHwnd() const noexcept { return frame_target_ ? frame_target_ : hwnd_; }
     Frame frame_ = Frame::System;
     float scale_ = 1.0f;
     int client_w_ = 0, client_h_ = 0;   // 物理像素

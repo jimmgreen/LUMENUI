@@ -1,5 +1,6 @@
 #include "menu_window.h"
 #include "app_host.h"
+#include "native_callback.h"
 #include "lumen/Animate.h"
 #include "lumen/Command.h"
 #include "lumen/Icons.h"
@@ -152,6 +153,7 @@ bool MenuWindow::ContainsScreenPx(POINT screen_px) const {
 int MenuWindow::Show(HWND owner, std::vector<MenuItem>& items, POINT screen_px,
                      const Theme& theme, float scale, float min_width_dip,
                      std::function<bool(wchar_t)> on_char) {
+    NativeCallbackScope callback;
     MenuWindow menu(items, theme, scale, min_width_dip);
     menu.on_char_ = std::move(on_char);
     return menu.Run(owner, screen_px);
@@ -223,11 +225,11 @@ bool MenuWindow::CreatePopup(HWND owner, POINT screen_px) {
 
     EnsureLumenClass(LumenClass::Menu, &MenuWindow::WndProc, 0, true);
 
-    DpiContextScope dpi_scope;
+    DpiContextScope dpi_scope(owner);
     hwnd_ = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST,
         LumenClassName(LumenClass::Menu), L"", WS_POPUP, screen_px.x, screen_px.y, width_px_,
-        height_px_, owner, nullptr, LumenModule(), this);
+        height_px_, GetAncestor(owner, GA_ROOT), nullptr, LumenModule(), this);
     if (!hwnd_) {
         Log(L"menu CreateWindow fail lastError=%lu pos=(%ld,%ld) size=(%d,%d)", GetLastError(),
             screen_px.x, screen_px.y, width_px_, height_px_);
@@ -383,6 +385,7 @@ int MenuWindow::Run(HWND owner, POINT screen_px) {
 }
 
 LRESULT CALLBACK MenuWindow::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    NativeCallbackScope callback;
     if (msg == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
@@ -459,6 +462,7 @@ LRESULT MenuWindow::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         HandleKey(wparam);
         return 0;
     case WM_TIMER:
+        if (renderer_ && renderer_->HandleFrameTimer(static_cast<UINT_PTR>(wparam))) return 0;
         OnSubmenuTimer(static_cast<UINT_PTR>(wparam));
         return 0;
     case WM_KILLFOCUS:
@@ -776,7 +780,8 @@ void MenuWindow::Dismiss(int result, const wchar_t* reason) {
 }
 
 void MenuWindow::Paint() {
-    if (!renderer_) return;
+    if (!renderer_ || renderer_->DeferHostFrame()) return;
+    if (renderer_->NeedsRecovery() && !renderer_->Recover()) return;
     TickAppear();
     ID2D1DeviceContext2* dc = renderer_->BeginDraw();
     if (first_paint_) {
@@ -888,7 +893,10 @@ void MenuWindow::Paint() {
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
-    if (appear_t_ < 1.0f && hwnd_) InvalidateRect(hwnd_, nullptr, FALSE);
+    if ((appear_t_ < 1.0f || !presented) && hwnd_) {
+        if (App::HostMode()) renderer_->RequestHostFrame();
+        else InvalidateRect(hwnd_, nullptr, FALSE);
+    }
 }
 
 

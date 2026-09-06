@@ -71,12 +71,16 @@ Toast / Dialog / Drawer 已有亚克力与海拔，不叠加自制半透明黑�
 
 AutoCAD .arx / 插件 DLL：
 
-- 第一个窗口前 `App::HostMode(true)`，`WindowSpec.owner` 传宿主 HWND；嵌入子窗按需要设置 `matchDpiHwnd`。卸载前所有 Window 析构，确认 `App::CanShutdown()` 后 `App::Shutdown()`；UIA 引用或后台任务未结束时不得卸载模块。
+- 第一个窗口前 `App::HostMode(true)`，`WindowSpec.owner` 传宿主 HWND；原生嵌入设置 `WindowSpec.parent`，可选 `frameTarget` 将标题栏和 Resize 操作交给外壳；`NativeHandle()` 返回子窗。卸载前所有 Window 析构，确认 `App::CanShutdown()` 后 `App::Shutdown()`；UIA 引用或后台任务未结束时不得卸载模块。
 - RunAsync 的结果状态不等于线程已经退出；`RunningTasks()` / `CanShutdown()` 会等待系统线程退出（含闭包和 TLS 析构）再回收。后台函数及其线程局部对象不得无限阻塞，不能绕过门禁直接卸载。
 - 宿主自行泵消息，不创建 `App app` 或调用 `App::Run` / `lumen::Run`；跨线程使用 Window::Post。
 - 窗口失焦自动清焦点并在重新聚焦时恢复；`Window::ClearFocus()` / `Control::Blur()` 显式清除后不恢复。原生消息用 OnNativeMessage/BindNativeMessage，回调内不泵消息。
 - `App::AddFont(bytes | path)` 返回族名，供 `Label::FontFamily` / `RichLabel::Font` 使用。`App::LumaTextLibrary(path)` 在首窗创建前设置且显式路径优先，也可将 DLL 放在 .arx 旁。
 - 宿主主窗的模态禁用与恢复由调用方管理。
+- 原生外壳 WM_SIZE 将子窗填满客户区；WM_GETMINMAXINFO 转发子窗以应用 MinSize；WM_NCHITTEST 可转发子窗复用 Client 标题栏。外壳应用 WM_DPICHANGED 的建议位置后可转发给子窗，子窗仅更新 DPI 与布局。
+- 嵌入子窗 Close 先执行 OnClosing，允许后异步发送外壳 WM_CLOSE；外壳 WM_CLOSE 执行自己的关闭协议，不能再转发子窗 WM_CLOSE。外壳取消操作可先转发子窗 WM_CLOSE 以执行否决逻辑；窗口析构必须由创建该 LUMEN 窗口的线程完成。
+- MFC 外壳的 PreTranslateMessage 对 LUMEN 子窗及后代返回 FALSE，让 LUMEN 处理 Tab、Enter、Esc 和 IME；子窗提供 WM_GETDLGCODE 全键盘标志。外壳与子窗应避免相互同步等待；Resize 对外壳使用异步 SetWindowPos。
+- HostMode 的帧呈现可退让，默认约 60Hz；无需增加渲染线程。菜单与独立弹出内容的原生 owner 为根外壳，保持不激活显示，输入和 IME 仍以 LUMEN 子窗为源。
 
 ## 验证与排障
 

@@ -3,6 +3,7 @@
 // frame_chrome、ime_bridge、tray_host、timer_host。
 #include "window_impl.h"
 #include "app_host.h"
+#include "native_callback.h"
 #include "popup_window.h"
 #include "hotkey.h"
 #include "lumatext_bridge.h"
@@ -80,6 +81,7 @@ float QpcMs(LARGE_INTEGER start, LARGE_INTEGER freq) {
 } // namespace
 
 struct WindowImpl::OleDropTarget : IDropTarget {
+    NativeObjectLifetime lifetime_;
     explicit OleDropTarget(WindowImpl* owner) : owner_(owner) {}
     ~OleDropTarget() { Reset(); }
     void Detach() noexcept {
@@ -87,7 +89,7 @@ struct WindowImpl::OleDropTarget : IDropTarget {
         owner_ = nullptr;
     }
 
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { NativeCallbackScope callback;
         if (!ppv) return E_POINTER;
         if (riid == IID_IUnknown || riid == IID_IDropTarget) {
             *ppv = static_cast<IDropTarget*>(this);
@@ -97,15 +99,15 @@ struct WindowImpl::OleDropTarget : IDropTarget {
         *ppv = nullptr;
         return E_NOINTERFACE;
     }
-    STDMETHODIMP_(ULONG) AddRef() override {
+    STDMETHODIMP_(ULONG) AddRef() override { NativeCallbackScope callback;
         return static_cast<ULONG>(InterlockedIncrement(&refs_));
     }
-    STDMETHODIMP_(ULONG) Release() override {
+    STDMETHODIMP_(ULONG) Release() override { NativeCallbackScope callback;
         const LONG n = InterlockedDecrement(&refs_);
         if (n == 0) delete this;
         return static_cast<ULONG>(n);
     }
-    STDMETHODIMP DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override {
+    STDMETHODIMP DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override { NativeCallbackScope callback;
         if (!effect) return E_INVALIDARG;
         const DWORD allowed = *effect;
         *effect = DROPEFFECT_NONE;
@@ -118,7 +120,7 @@ struct WindowImpl::OleDropTarget : IDropTarget {
         Update(pt, keys, effect, allowed);
         return S_OK;
     }
-    STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* effect) override {
+    STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* effect) override { NativeCallbackScope callback;
         if (!effect) return E_INVALIDARG;
         const DWORD allowed = *effect;
         *effect = DROPEFFECT_NONE;
@@ -126,12 +128,12 @@ struct WindowImpl::OleDropTarget : IDropTarget {
         Update(pt, keys, effect, allowed);
         return S_OK;
     }
-    STDMETHODIMP DragLeave() override {
+    STDMETHODIMP DragLeave() override { NativeCallbackScope callback;
         Describe(DROPIMAGE_INVALID);
         Reset();
         return S_OK;
     }
-    STDMETHODIMP Drop(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override {
+    STDMETHODIMP Drop(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override { NativeCallbackScope callback;
         if (!effect) return E_INVALIDARG;
         const DWORD allowed = *effect;
         *effect = DROPEFFECT_NONE;
@@ -300,7 +302,8 @@ private:
 namespace {
 
 struct TextDropSource : IDropSource {
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    NativeObjectLifetime lifetime_;
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { NativeCallbackScope callback;
         if (!ppv) return E_POINTER;
         if (riid == IID_IUnknown || riid == IID_IDropSource) {
             *ppv = static_cast<IDropSource*>(this);
@@ -310,26 +313,27 @@ struct TextDropSource : IDropSource {
         *ppv = nullptr;
         return E_NOINTERFACE;
     }
-    STDMETHODIMP_(ULONG) AddRef() override {
+    STDMETHODIMP_(ULONG) AddRef() override { NativeCallbackScope callback;
         return static_cast<ULONG>(InterlockedIncrement(&refs_));
     }
-    STDMETHODIMP_(ULONG) Release() override {
+    STDMETHODIMP_(ULONG) Release() override { NativeCallbackScope callback;
         const LONG n = InterlockedDecrement(&refs_);
         if (n == 0) delete this;
         return static_cast<ULONG>(n);
     }
-    STDMETHODIMP QueryContinueDrag(BOOL escape, DWORD keys) override {
+    STDMETHODIMP QueryContinueDrag(BOOL escape, DWORD keys) override { NativeCallbackScope callback;
         if (escape) return DRAGDROP_S_CANCEL;
         if ((keys & MK_LBUTTON) == 0) return DRAGDROP_S_DROP;
         return S_OK;
     }
-    STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+    STDMETHODIMP GiveFeedback(DWORD) override { NativeCallbackScope callback; return DRAGDROP_S_USEDEFAULTCURSORS; }
     LONG refs_ = 1;
 };
 
 struct TextDataObject : IDataObject {
+    NativeObjectLifetime lifetime_;
     explicit TextDataObject(std::wstring_view text) : text_(text) {}
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { NativeCallbackScope callback;
         if (!ppv) return E_POINTER;
         if (riid == IID_IUnknown || riid == IID_IDataObject) {
             *ppv = static_cast<IDataObject*>(this);
@@ -339,15 +343,15 @@ struct TextDataObject : IDataObject {
         *ppv = nullptr;
         return E_NOINTERFACE;
     }
-    STDMETHODIMP_(ULONG) AddRef() override {
+    STDMETHODIMP_(ULONG) AddRef() override { NativeCallbackScope callback;
         return static_cast<ULONG>(InterlockedIncrement(&refs_));
     }
-    STDMETHODIMP_(ULONG) Release() override {
+    STDMETHODIMP_(ULONG) Release() override { NativeCallbackScope callback;
         const LONG n = InterlockedDecrement(&refs_);
         if (n == 0) delete this;
         return static_cast<ULONG>(n);
     }
-    STDMETHODIMP GetData(FORMATETC* fmt, STGMEDIUM* medium) override {
+    STDMETHODIMP GetData(FORMATETC* fmt, STGMEDIUM* medium) override { NativeCallbackScope callback;
         if (!fmt || !medium) return E_POINTER;
         if (fmt->cfFormat != CF_UNICODETEXT || (fmt->tymed & TYMED_HGLOBAL) == 0) {
             return DV_E_FORMATETC;
@@ -364,30 +368,30 @@ struct TextDataObject : IDataObject {
         medium->pUnkForRelease = nullptr;
         return S_OK;
     }
-    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
-    STDMETHODIMP QueryGetData(FORMATETC* fmt) override {
+    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { NativeCallbackScope callback; return E_NOTIMPL; }
+    STDMETHODIMP QueryGetData(FORMATETC* fmt) override { NativeCallbackScope callback;
         if (!fmt) return E_POINTER;
         if (fmt->cfFormat == CF_UNICODETEXT && (fmt->tymed & TYMED_HGLOBAL) != 0) return S_OK;
         return DV_E_FORMATETC;
     }
-    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override {
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override { NativeCallbackScope callback;
         if (!out) return E_POINTER;
         *out = {CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         return DATA_S_SAMEFORMATETC;
     }
-    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
-    STDMETHODIMP EnumFormatEtc(DWORD dir, IEnumFORMATETC** enum_fmt) override {
+    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { NativeCallbackScope callback; return E_NOTIMPL; }
+    STDMETHODIMP EnumFormatEtc(DWORD dir, IEnumFORMATETC** enum_fmt) override { NativeCallbackScope callback;
         if (!enum_fmt) return E_POINTER;
         *enum_fmt = nullptr;
         if (dir != DATADIR_GET) return E_NOTIMPL;
         FORMATETC fmt{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         return SHCreateStdEnumFmtEtc(1, &fmt, enum_fmt);
     }
-    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
+    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { NativeCallbackScope callback;
         return OLE_E_ADVISENOTSUPPORTED;
     }
-    STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
-    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP DUnadvise(DWORD) override { NativeCallbackScope callback; return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { NativeCallbackScope callback; return OLE_E_ADVISENOTSUPPORTED; }
     std::wstring text_;
     LONG refs_ = 1;
 };
@@ -395,6 +399,7 @@ struct TextDataObject : IDataObject {
 } // namespace
 
 DWORD WindowImpl::DragUnicodeText(std::wstring_view text) {
+    NativeCallbackScope callback;
     if (text.empty()) return DROPEFFECT_NONE;
     auto* data = new TextDataObject(text);
     auto* source = new TextDropSource();
@@ -436,7 +441,8 @@ Window::Window(WindowSpec spec) {
     if (size.h <= 0.0f) size.h = 640.0f;
     impl_ = std::make_unique<WindowImpl>(this, spec.title, size, spec.frame,
                                          static_cast<HWND>(spec.owner), spec.titleBar,
-                                         static_cast<HWND>(spec.matchDpiHwnd));
+                                         static_cast<HWND>(spec.matchDpiHwnd),
+                                         static_cast<HWND>(spec.parent), static_cast<HWND>(spec.frameTarget));
     Backdrop(spec.backdrop);
     // 无标题栏弹出层保持固定客户区，勿再缩 MinSize。
     if (spec.titleBar)
@@ -720,8 +726,8 @@ void Window::MinimizeToTray(bool on) { impl_->MinimizeToTray(on); }
 void Window::TrayMenu(Menu menu) { impl_->SetTrayMenu(std::move(menu)); }
 
 WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame,
-                       HWND owner, bool title_bar, HWND match_dpi_hwnd)
-    : api_(api), frame_(frame), title_(title), glow_intensity_(0.5f) {
+                       HWND owner, bool title_bar, HWND match_dpi_hwnd, HWND parent, HWND frame_target)
+    : api_(api), parent_(parent), frame_target_(parent ? frame_target : nullptr), frame_(frame), title_(title), glow_intensity_(0.5f) {
     ui_thread_id_ = GetCurrentThreadId();
     QueryPerformanceFrequency(&qpc_freq_);
     root_ = std::make_unique<StackPanel>();
@@ -733,7 +739,7 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
     }
     EnsureWindowClass();
     // 宿主模式默认 PMv2；嵌入子窗时对齐父窗 DPI 感知，否则 SetParent 报 ERROR_INVALID_STATE。
-    DpiContextScope dpi_scope(match_dpi_hwnd);
+    DpiContextScope dpi_scope(parent_ ? parent_ : match_dpi_hwnd);
     scale_ = static_cast<float>(GetDpiForSystem()) / 96.0f;
     POINT cursor{};
     RECT owner_rect{};
@@ -751,11 +757,12 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
         }
     }
 
+    if (parent_) scale_ = static_cast<float>(GetDpiForWindow(parent_)) / 96.0f;
     const DWORD style = FrameStyle();
     const DWORD ex_style = WS_EX_NOREDIRECTIONBITMAP;
     RECT rect{0, 0, static_cast<LONG>(client_size.w * scale_),
               static_cast<LONG>(client_size.h * scale_)};
-    AdjustFrameRect(&rect);
+    if (!parent_) AdjustFrameRect(&rect);
     int x = CW_USEDEFAULT;
     int y = CW_USEDEFAULT;
     const int width = rect.right - rect.left;
@@ -776,8 +783,9 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
             y = monitor.rcWork.top + (monitor.rcWork.bottom - monitor.rcWork.top - height) / 2;
         }
     }
+    if (parent_) { x = 0; y = 0; }
     hwnd_ = CreateWindowExW(ex_style, LumenClassName(LumenClass::Window), title_.c_str(), style, x,
-                            y, width, height, has_owner ? owner : nullptr, nullptr, LumenModule(),
+                            y, width, height, parent_ ? parent_ : (has_owner ? owner : nullptr), nullptr, LumenModule(),
                             this);
     if (hwnd_) ++g_live_windows;
     if (hwnd_) {
@@ -818,6 +826,7 @@ void WindowImpl::EnsureWindowClass() {
 }
 
 LRESULT CALLBACK WindowImpl::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    NativeCallbackScope callback;
     if (msg == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
         auto* self = static_cast<WindowImpl*>(create->lpCreateParams);
@@ -842,7 +851,11 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     PopupWindow::OwnerMessage(this, msg, wparam);
     if (PopupWindow::FilterInput(this, hwnd, msg, wparam, lparam)) return 0;
     switch (msg) {
+    case WM_GETDLGCODE:
+        if (parent_) return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
+        break;
     case WM_SHOWWINDOW:
+        if (!wparam) { renderer_.StopFrameTimer(); animating_ = false; }
         if (shown_state_ != (wparam != 0)) {
             shown_state_ = wparam != 0;
             if (!shown_state_) {
@@ -928,15 +941,22 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_NCLBUTTONDOWN:
         if (frame_ != Frame::Client) break;
         if (wparam == HTMINBUTTON) {
-            ShowWindow(hwnd, SW_MINIMIZE);
+            if (frame_target_) PostMessageW(frame_target_, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+            else ShowWindow(hwnd, SW_MINIMIZE);
             return 0;
         }
         if (wparam == HTMAXBUTTON) {
-            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            if (frame_target_) PostMessageW(frame_target_, WM_SYSCOMMAND, IsZoomed(frame_target_) ? SC_RESTORE : SC_MAXIMIZE, 0);
+            else ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
             return 0;
         }
         if (wparam == HTCLOSE) {
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+        }
+        if (frame_target_) {
+            ReleaseCapture();
+            PostMessageW(frame_target_, WM_NCLBUTTONDOWN, wparam, lparam);
             return 0;
         }
         break;
@@ -944,7 +964,8 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (frame_ == Frame::Client && wparam == HTCAPTION) {
             if (title_bar_ && !title_bar_->ShowMaximize())
                 return 0;
-            ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+            if (frame_target_) PostMessageW(frame_target_, WM_SYSCOMMAND, IsZoomed(frame_target_) ? SC_RESTORE : SC_MAXIMIZE, 0);
+            else ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
             return 0;
         }
         break;
@@ -956,6 +977,7 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         Invalidate();
         return 0;
     case WM_SIZE:
+        if (wparam == SIZE_MINIMIZED) { renderer_.StopFrameTimer(); animating_ = false; }
         if (wparam == SIZE_MINIMIZED && minimize_to_tray_ && tray_installed_) {
             ShowWindow(hwnd, SW_HIDE);
             return 0;
@@ -977,7 +999,7 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         backdrop_cache_dirty_ = true;
         painter_.InvalidateAcrylic();
         auto* suggested = reinterpret_cast<const RECT*>(lparam);
-        if (suggested) {
+        if (suggested && !parent_) {
             SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                          suggested->right - suggested->left, suggested->bottom - suggested->top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
@@ -987,6 +1009,16 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         Invalidate();
         return 0;
     }
+    case WM_DPICHANGED_AFTERPARENT:
+        if (parent_) {
+            scale_ = static_cast<float>(GetDpiForWindow(hwnd_)) / 96.0f;
+            backdrop_cache_.reset();
+            backdrop_cache_dirty_ = true;
+            painter_.InvalidateAcrylic();
+            UpdateClientSize();
+            RequestRelayout();
+        }
+        return 0;
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
         if (min_size_dip_.w > 0.0f && min_size_dip_.h > 0.0f) {
@@ -1184,6 +1216,10 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return UiaGetObject(wparam, lparam);
     case WM_CLOSE:
         if (closing_ && !closing_()) return 0;
+        if (frame_target_) {
+            PostMessageW(frame_target_, WM_CLOSE, 0, 0);
+            return 0;
+        }
         SavePlacement();
         DestroyWindow(hwnd_);
         return 0;
@@ -1206,6 +1242,7 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (api_) api_->destroyed_.Emit();
         return 0;
     case WM_TIMER:
+        if (renderer_.HandleFrameTimer(static_cast<UINT_PTR>(wparam))) return 0;
         if (static_cast<UINT_PTR>(wparam) == kToastWakeTimerId) {
             KillTimer(hwnd_, kToastWakeTimerId);
             toast_wake_armed_ = false;
@@ -1219,6 +1256,11 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         RequestRelayout();
         return 0;
     case WM_SYSCOMMAND:
+        if (frame_target_) {
+            if ((wparam & 0xFFF0) == SC_CLOSE) Close();
+            else PostMessageW(frame_target_, msg, wparam, lparam);
+            return 0;
+        }
         if (minimize_to_tray_ && tray_installed_ && (wparam & 0xFFF0) == SC_MINIMIZE) {
             ShowWindow(hwnd, SW_HIDE);
             return 0;
@@ -1274,7 +1316,7 @@ void WindowImpl::RefreshTheme() {
 }
 
 void WindowImpl::Show() {
-    ApplyPlacement();
+    if (!parent_) ApplyPlacement();
     ShowWindow(hwnd_, SW_SHOW);
     if (hwnd_) AppBindWindow(hwnd_);
     Invalidate();
@@ -1287,6 +1329,7 @@ void WindowImpl::Close() {
 void WindowImpl::Title(std::wstring_view text) {
     title_ = std::wstring(text);
     if (hwnd_) SetWindowTextW(hwnd_, title_.c_str());
+    if (frame_target_) SetWindowTextW(frame_target_, title_.c_str());
     if (title_bar_) title_bar_->Title(title_);
     if (frame_ == Frame::Client) Invalidate();
 }
@@ -1295,8 +1338,8 @@ void WindowImpl::Resize(Size client_size) {
     RECT rect{0, 0, static_cast<LONG>(client_size.w * scale_),
               static_cast<LONG>(client_size.h * scale_)};
     AdjustFrameRect(&rect);
-    SetWindowPos(hwnd_, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(FrameHwnd(), nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | (frame_target_ ? SWP_ASYNCWINDOWPOS : 0));
 }
 
 Size WindowImpl::MeasureContent(float client_width) {
@@ -1345,6 +1388,7 @@ void WindowImpl::RequestPaint() {
         return;
     }
     if (!hwnd_) return;
+    if (App::HostMode()) { renderer_.RequestHostFrame(); return; }
     if (dirty_full_ || dirty_count_ <= 0) {
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
@@ -2101,6 +2145,7 @@ void WindowImpl::DrawTree(Control* control) {
 void WindowImpl::Paint() {
     if (painting_) return;
     if (!hwnd_ || client_w_ <= 0 || client_h_ <= 0) return;
+    if (renderer_.DeferHostFrame()) return;
     if (renderer_.NeedsRecovery()) {
         backdrop_cache_.reset();
         backdrop_cache_dirty_ = true;
@@ -2133,7 +2178,7 @@ void WindowImpl::Paint() {
     QueryPerformanceCounter(&t_frame);
     bool more = false;
     // 隐藏期间保留暂停的目标；重新显示导致的第一帧恢复调度，不累积隐藏时长。
-    if (!animating_ && !anim_targets_.empty()) {
+    if (!animating_ && (!anim_targets_.empty() || !frame_cbs_.empty())) {
         QueryPerformanceCounter(&last_tick_);
         animating_ = true;
     }

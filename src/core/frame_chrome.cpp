@@ -27,6 +27,7 @@ constexpr float kCaptionButtonDip = 46.0f;
 }
 
 DWORD WindowImpl::FrameStyle() const {
+    if (parent_) return WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_TABSTOP;
     if (frame_ == Frame::Client) {
         // 无标题栏：纯弹出层，不可拖边缩放、无系统菜单。
         if (!title_bar_)
@@ -37,7 +38,14 @@ DWORD WindowImpl::FrameStyle() const {
 }
 
 void WindowImpl::AdjustFrameRect(RECT* rect) const {
-    if (frame_ == Frame::System) {
+    if (frame_target_) {
+        // Use actual shell margins: custom native shells may suppress their nonclient frame.
+        RECT outer{}, client{};
+        if (GetWindowRect(frame_target_, &outer) && GetClientRect(frame_target_, &client)) {
+            rect->right += outer.right - outer.left - (client.right - client.left);
+            rect->bottom += outer.bottom - outer.top - (client.bottom - client.top);
+        }
+    } else if (!parent_ && frame_ == Frame::System) {
         AdjustWindowRectExForDpi(rect, FrameStyle(), FALSE, WS_EX_NOREDIRECTIONBITMAP,
                                  static_cast<UINT>(scale_ * 96.0f));
     }
@@ -53,7 +61,7 @@ float WindowImpl::CaptionHeight() const noexcept {
 }
 
 void WindowImpl::ApplyClientChrome() {
-    if (frame_ != Frame::Client || !hwnd_) return;
+    if (parent_ || frame_ != Frame::Client || !hwnd_) return;
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     const DWORD corner = DWMWCP_ROUND;
@@ -88,7 +96,7 @@ LRESULT WindowImpl::CaptionButtonAt(POINT client_px) const {
 
 LRESULT WindowImpl::HitTestFrame(LPARAM lparam) const {
     POINT screen{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-    if (!IsZoomed(hwnd_)) {
+    if ((!parent_ || frame_target_) && !IsZoomed(FrameHwnd())) {
         RECT window{};
         GetWindowRect(hwnd_, &window);
         const UINT dpi = GetDpiForWindow(hwnd_);
@@ -155,7 +163,7 @@ void WindowImpl::TrackNcMouse() {
 
 void WindowImpl::DrawCaption(const Rect&) {
     if (!title_bar_) return;
-    title_bar_->Maximized(hwnd_ && IsZoomed(hwnd_) != FALSE);
+    title_bar_->Maximized(FrameHwnd() && IsZoomed(FrameHwnd()) != FALSE);
     DrawTree(title_bar_.get());
 }
 

@@ -4,6 +4,7 @@
 #include "core/lumatext_bridge.h"
 #include "core/text_service.h"
 #include "core/renderer.h"
+#include "core/menu_window.h"
 #include <objbase.h>
 #include <algorithm>
 #include <array>
@@ -3940,6 +3941,61 @@ void TestLumaTextAlignmentCache() {
 }
 
 // 宿主模式循环：模拟 .arx 卸载/重载——Shutdown 后必须能重新注册窗口类、重建文本服务。
+void TestNativeCallbacks() {
+    Window window(WindowSpec{.title = L"callback-gate", .size = {240.0f, 120.0f}});
+    const HWND hwnd = static_cast<HWND>(window.NativeHandle());
+    Check(!App::HasActiveCallbacks(), "idle native window permits begin-cleanup");
+    constexpr UINT outer = WM_APP + 701, inner = WM_APP + 702;
+    bool nested = false, destroyed = false;
+    auto connection = window.BindNativeMessage([&](std::uint32_t msg, std::uintptr_t, std::intptr_t) {
+        if (msg == inner) {
+            nested = App::HasActiveCallbacks() && !App::CanShutdown();
+        } else if (msg == outer) {
+            SendMessageW(hwnd, inner, 0, 0);
+            Check(nested && App::HasActiveCallbacks(), "nested WndProc preserves outer callback gate");
+            bool rejected = false;
+            try { App::Shutdown(); } catch (const std::runtime_error&) { rejected = true; }
+            Check(rejected && IsWindow(hwnd), "reentrant shutdown fails before destroying resources");
+        } else if (msg == WM_NCDESTROY) {
+            destroyed = App::HasActiveCallbacks();
+        }
+    });
+    SendMessageW(hwnd, outer, 0, 0);
+    Check(!App::HasActiveCallbacks(), "WndProc callback gate drains on return");
+    // TIMERPROC 直接由模态消息泵派发，回调时没有 LUMEN WndProc 栈。
+    auto probe = [](HWND, UINT, UINT_PTR id, DWORD) {
+        KillTimer(nullptr, id);
+        Check(App::HasActiveCallbacks() && !App::CanShutdown(), "native session blocks cleanup between WndProc calls");
+        HWND popup = FindWindowW(L"lumen_popup", nullptr);
+        if (!popup) popup = FindWindowW(L"lumen_menu", nullptr);
+        Check(popup != nullptr, "native session timer finds popup");
+        if (popup) PostMessageW(popup, WM_KEYDOWN, VK_ESCAPE, 0);
+    };
+    window.Show();
+    std::vector<MenuItem> items(1);
+    items[0].text = L"Callback gate";
+    const UINT_PTR menu_timer = SetTimer(nullptr, 0, 30, probe);
+    Check(menu_timer != 0, "menu gate timer created");
+    if (menu_timer) {
+        static const Theme theme{};
+        MenuWindow::Show(hwnd, items, POINT{120, 120}, theme, 1.0f);
+        KillTimer(nullptr, menu_timer);
+        Check(!App::HasActiveCallbacks(), "menu session gate drains");
+    }
+    StackPanel content;
+    content.Add<Label>(L"Callback gate");
+    const UINT_PTR popup_timer = SetTimer(nullptr, 0, 30, probe);
+    Check(popup_timer != 0, "popup gate timer created");
+    if (popup_timer) {
+        window.ShowPopup(content, nullptr, 240.0f);
+        KillTimer(nullptr, popup_timer);
+        Check(!App::HasActiveCallbacks(), "popup session gate drains");
+    }
+    DestroyWindow(hwnd);
+    Check(destroyed && !App::HasActiveCallbacks(), "NCDESTROY stays gated until native return");
+    Check(App::CanShutdown(), "OLE targets released after window destruction");
+}
+
 void TestHostCycle() {
     auto pump = [](HWND hwnd) {
         MSG msg{};
@@ -3952,6 +4008,7 @@ void TestHostCycle() {
     for (MSG drain{}; PeekMessageW(&drain, nullptr, 0, 0, PM_REMOVE);) {}
     App::HostMode(true);
     Check(App::HostMode(), "host mode flag");
+    TestNativeCallbacks();
     // 硬件设备若在循环中退化到 WARP，说明窗口开关泄漏了 D3D/DComp 设备链。
     int warp_falls = 0;
     SetLogSink([&warp_falls](LogLevel level, std::wstring_view text) {
@@ -3968,6 +4025,10 @@ void TestHostCycle() {
             App::HostMode(false);
             return;
         }
+        WNDCLASSEXW retired{};
+        retired.cbSize = sizeof(retired);
+        Check(!GetClassInfoExW(GetModuleHandleW(nullptr), L"lumen_popup", &retired),
+              "host shutdown unregisters popup class");
         // 独立测试进程没有其他字体库使用者，关闭后自有引用都应归还。
         Check(!GetModuleHandleW(L"lumatext.dll") && !GetModuleHandleW(L"lumatextd.dll"),
               "host shutdown releases LumaText module");
@@ -4004,6 +4065,86 @@ void TestHostCycle() {
         pump(owner_hwnd);
         Check(owner.NativeHandle() == nullptr, "destroyed owner forgets native handle");
         Check(owned.NativeHandle() == nullptr, "owner destruction clears owned handle");
+    }
+    {
+        HWND shell = CreateWindowExW(0, L"STATIC", L"native-shell", WS_OVERLAPPEDWINDOW,
+                                      0, 0, 400, 300, nullptr, nullptr, nullptr, nullptr);
+        Check(shell != nullptr, "embedded native shell created");
+        Window child(WindowSpec{.title = L"embedded", .size = {240.0f, 120.0f},
+                                .parent = shell, .frameTarget = shell});
+        child.Root().Add<Label>(L"Embedded host animation");
+        HWND hwnd = static_cast<HWND>(child.NativeHandle());
+        const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        Check((style & WS_CHILD) != 0 && (style & WS_POPUP) == 0,
+              "embedded window is created as a child");
+        Check(GetParent(hwnd) == shell && child.TitleBar() != nullptr,
+              "embedded window retains client title bar and parent");
+        Check(AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(hwnd),
+                                           GetWindowDpiAwarenessContext(shell)),
+              "embedded window matches parent DPI context");
+        Check((SendMessageW(hwnd, WM_GETDLGCODE, 0, 0) & DLGC_WANTALLKEYS) != 0,
+              "embedded keyboard bypasses dialog defaults");
+        child.MinSize({200.0f, 100.0f});
+        MINMAXINFO limits{};
+        SendMessageW(hwnd, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&limits));
+        Check(limits.ptMinTrackSize.x >= 200 && limits.ptMinTrackSize.y >= 100,
+              "embedded minimum dimensions available to shell");
+        RECT before{}, after{};
+        GetWindowRect(hwnd, &before);
+        child.Resize({360.0f, 220.0f});
+        RECT client{};
+        GetClientRect(shell, &client);
+        const float scale = GetDpiForWindow(hwnd) / 96.0f;
+        Check(client.right == static_cast<LONG>(360.0f * scale) &&
+              client.bottom == static_cast<LONG>(220.0f * scale),
+              "embedded Resize targets native shell client area");
+        GetWindowRect(hwnd, &after);
+        Check(after.right - after.left == before.right - before.left,
+              "embedded Resize leaves child layout to shell");
+        RECT suggested{80, 90, 500, 400};
+        const UINT dpi = GetDpiForWindow(hwnd);
+        SendMessageW(hwnd, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&suggested));
+        GetWindowRect(hwnd, &after);
+        Check(after.left == before.left && after.top == before.top,
+              "embedded DPI change ignores top-level suggested position");
+        ShowWindow(shell, SW_SHOWNOACTIVATE);
+        child.Show();
+        int frames = 0;
+        bool run = true;
+        auto animation = child.OnFrame([&](float) { ++frames; return run; });
+        auto pump_for = [&](DWORD milliseconds) {
+            const ULONGLONG end = GetTickCount64() + milliseconds;
+            while (GetTickCount64() < end) { pump(nullptr); Sleep(1); }
+        };
+        pump_for(240);
+        std::printf("[host frames] active=%d\n", frames);
+        Check(frames > 1 && frames < 30, "host animation yields between coalesced frames");
+        child.Hide();
+        const int hidden_frames = frames;
+        pump_for(80);
+        Check(frames == hidden_frames, "hidden host animation stops");
+        child.Show();
+        pump_for(80);
+        std::printf("[host frames] resumed=%d hidden=%d\n", frames, hidden_frames);
+        Check(frames > hidden_frames, "host animation resumes after show");
+        run = false;
+        pump_for(80);
+        const int settled_frames = frames;
+        pump_for(80);
+        Check(frames == settled_frames, "settled host animation stops scheduling");
+        child.OnClosing([] { return false; });
+        child.Close();
+        pump(hwnd);
+        MSG closing{};
+        Check(!PeekMessageW(&closing, shell, WM_CLOSE, WM_CLOSE, PM_REMOVE),
+              "embedded closing veto prevents shell close");
+        child.OnClosing([] { return true; });
+        child.Close();
+        pump(hwnd);
+        Check(PeekMessageW(&closing, shell, WM_CLOSE, WM_CLOSE, PM_REMOVE) != FALSE,
+              "embedded close delegates to shell after approval");
+        DestroyWindow(shell);
+        Check(child.Closed(), "native shell destruction closes child");
     }
     Check(warp_falls == 0, "host cycle keeps hardware D3D device");
     SetLogSink(nullptr);
@@ -4939,7 +5080,10 @@ void TestUia() {
     auto& col = window.Root().Add<Column>().Spacing(8.0f);
     int clicks = 0;
     auto& btn = col.Add<Button>(L"UiaInvoke");
-    btn.OnClick([&] { ++clicks; });
+    btn.OnClick([&] {
+        ++clicks;
+        Check(App::HasActiveCallbacks() && !App::CanShutdown(), "UIA invoke blocks reentrant shutdown");
+    });
     auto& box = col.Add<CheckBox>(L"UiaCheck");
     auto& slider = col.Add<Slider>();
     slider.Range(0.0f, 100.0f).Value(25.0f);
@@ -5090,6 +5234,7 @@ void TestUia() {
         }
         found->Release();
     }
+    Check(!App::HasActiveCallbacks(), "idle UIA providers allow host to begin cleanup");
     Check(!App::CanShutdown(), "live UIA providers block shutdown");
     HWND closing_hwnd = static_cast<HWND>(window.NativeHandle());
     window.Close();

@@ -24,6 +24,12 @@ public:
     bool EndDraw(bool wait_vsync = true);  // 提交 DComp；设备丢失时返回 false 并置 NeedsRecovery
     bool EndDraw(bool wait_vsync, const RECT* dirty, UINT dirty_count);
     bool NeedsRecovery() const noexcept { return device_lost_; }
+    bool PresentPending() const noexcept { return present_pending_; }
+    // Host frames yield to the caller's message pump, with one coalesced 60 Hz wake.
+    void RequestHostFrame();
+    bool DeferHostFrame();
+    bool HandleFrameTimer(UINT_PTR id);
+    void StopFrameTimer();
     bool Ready() const noexcept { return ready_; }
     bool Recover();   // 重建全部设备资源
     LumaTextBridge* Luma() noexcept { return luma_.get(); }
@@ -51,6 +57,11 @@ private:
     int width_ = 0, height_ = 0;
     bool device_lost_ = false;
     bool ready_ = false;
+    bool present_pending_ = false;
+    bool frame_timer_armed_ = false;
+    ULONGLONG next_frame_ms_ = 0;
+    static constexpr UINT_PTR kFrameTimerId = 0x4C554D46;
+    static constexpr UINT kHostFrameIntervalMs = (1000 + 59) / 60;
 
     ComPtr<ID3D11Device> d3d_;
     ComPtr<IDXGIDevice1> dxgi_;

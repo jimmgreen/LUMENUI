@@ -1,5 +1,6 @@
 // uia.cpp — 窗口级 UI Automation 提供程序。COM 类型不出公共头；模式派发走 Control 虚函数。
 #include "window_impl.h"
+#include "native_callback.h"
 #include "log.h"
 #include <memory>
 #include "lumen/Panel.h"
@@ -160,15 +161,15 @@ struct UiaNode final : IRawElementProviderSimple,
         return patterns;
     }
 
-    ULONG STDMETHODCALLTYPE AddRef() override { return refs.fetch_add(1, std::memory_order_relaxed) + 1; }
-    ULONG STDMETHODCALLTYPE Release() override {
+    ULONG STDMETHODCALLTYPE AddRef() override { NativeCallbackScope callback; return refs.fetch_add(1, std::memory_order_relaxed) + 1; }
+    ULONG STDMETHODCALLTYPE Release() override { NativeCallbackScope callback;
         const ULONG n = refs.fetch_sub(1, std::memory_order_acq_rel) - 1;
         // state 与外部 COM 客户端各自释放自己的引用。
         if (n == 0) delete this;
         return n;
     }
 
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override { NativeCallbackScope callback;
         if (!ppv) return E_POINTER;
         *ppv = nullptr;
         if (riid == IID_IUnknown || riid == IID_IRawElementProviderSimple) {
@@ -203,14 +204,14 @@ struct UiaNode final : IRawElementProviderSimple,
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE get_ProviderOptions(ProviderOptions* ret) override {
+    HRESULT STDMETHODCALLTYPE get_ProviderOptions(ProviderOptions* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = static_cast<ProviderOptions>(ProviderOptions_ServerSideProvider |
                                             ProviderOptions_UseComThreading);
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE GetPatternProvider(PATTERNID id, IUnknown** ret) override {
+    HRESULT STDMETHODCALLTYPE GetPatternProvider(PATTERNID id, IUnknown** ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = nullptr;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -247,7 +248,7 @@ struct UiaNode final : IRawElementProviderSimple,
     }
 
     HRESULT STDMETHODCALLTYPE GetPropertyValue(PROPERTYID id, VARIANT* ret) override;
-    HRESULT STDMETHODCALLTYPE get_HostRawElementProvider(IRawElementProviderSimple** ret) override {
+    HRESULT STDMETHODCALLTYPE get_HostRawElementProvider(IRawElementProviderSimple** ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = host_provider;
         if (*ret) (*ret)->AddRef();
@@ -255,19 +256,19 @@ struct UiaNode final : IRawElementProviderSimple,
     }
 
     HRESULT STDMETHODCALLTYPE Navigate(NavigateDirection dir, IRawElementProviderFragment** ret) override;
-    HRESULT STDMETHODCALLTYPE GetRuntimeId(SAFEARRAY** ret) override {
+    HRESULT STDMETHODCALLTYPE GetRuntimeId(SAFEARRAY** ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         const uintptr_t key = runtime_key;
         *ret = RuntimeId(key, 0, IsGhost() ? item_index : -1, item_column);
         return *ret ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE get_BoundingRectangle(UiaRect* ret) override;
-    HRESULT STDMETHODCALLTYPE GetEmbeddedFragmentRoots(SAFEARRAY** ret) override {
+    HRESULT STDMETHODCALLTYPE GetEmbeddedFragmentRoots(SAFEARRAY** ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = nullptr;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE SetFocus() override {
+    HRESULT STDMETHODCALLTYPE SetFocus() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (IsGhost() || !Impl()) return S_OK;
         if (Target() && Impl()->UiaFocusable(Target())) Impl()->SetFocusControl(Target());
@@ -279,20 +280,20 @@ struct UiaNode final : IRawElementProviderSimple,
                                                        IRawElementProviderFragment** ret) override;
     HRESULT STDMETHODCALLTYPE GetFocus(IRawElementProviderFragment** ret) override;
 
-    HRESULT STDMETHODCALLTYPE Invoke() override {
+    HRESULT STDMETHODCALLTYPE Invoke() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
         if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
         return Target()->AutomationInvoke() ? S_OK : UIA_E_INVALIDOPERATION;
     }
 
-    HRESULT STDMETHODCALLTYPE Toggle() override {
+    HRESULT STDMETHODCALLTYPE Toggle() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
         if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
         return Target()->AutomationToggle() ? S_OK : UIA_E_INVALIDOPERATION;
     }
-    HRESULT STDMETHODCALLTYPE get_ToggleState(ToggleState* ret) override {
+    HRESULT STDMETHODCALLTYPE get_ToggleState(ToggleState* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -301,7 +302,7 @@ struct UiaNode final : IRawElementProviderSimple,
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE SetValue(LPCWSTR value) override {
+    HRESULT STDMETHODCALLTYPE SetValue(LPCWSTR value) override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (IsCell()) {
             if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
@@ -312,7 +313,7 @@ struct UiaNode final : IRawElementProviderSimple,
         if (!Target()->Enabled() || Target()->AutomationIsReadOnly()) return UIA_E_ELEMENTNOTENABLED;
         return Target()->AutomationSetValue(value ? value : L"") ? S_OK : E_INVALIDARG;
     }
-    HRESULT STDMETHODCALLTYPE get_Value(BSTR* ret) override {
+    HRESULT STDMETHODCALLTYPE get_Value(BSTR* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -321,7 +322,7 @@ struct UiaNode final : IRawElementProviderSimple,
         *ret = SysAllocStringLen(text.c_str(), static_cast<UINT>(text.size()));
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_IsReadOnly(BOOL* ret) override {
+    HRESULT STDMETHODCALLTYPE get_IsReadOnly(BOOL* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -330,41 +331,41 @@ struct UiaNode final : IRawElementProviderSimple,
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE SetValue(double value) override {
+    HRESULT STDMETHODCALLTYPE SetValue(double value) override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
         if (!Target()->Enabled() || Target()->AutomationIsReadOnly()) return UIA_E_ELEMENTNOTENABLED;
         return Target()->AutomationSetRange(value) ? S_OK : E_INVALIDARG;
     }
-    HRESULT STDMETHODCALLTYPE get_Value(double* ret) override {
+    HRESULT STDMETHODCALLTYPE get_Value(double* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = Target() ? Target()->AutomationRangeValue() : 0.0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_Maximum(double* ret) override {
+    HRESULT STDMETHODCALLTYPE get_Maximum(double* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = Target() ? Target()->AutomationRangeMax() : 0.0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_Minimum(double* ret) override {
+    HRESULT STDMETHODCALLTYPE get_Minimum(double* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = Target() ? Target()->AutomationRangeMin() : 0.0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_LargeChange(double* ret) override {
+    HRESULT STDMETHODCALLTYPE get_LargeChange(double* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = Target() ? Target()->AutomationRangeLarge() : 10.0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_SmallChange(double* ret) override {
+    HRESULT STDMETHODCALLTYPE get_SmallChange(double* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -372,19 +373,19 @@ struct UiaNode final : IRawElementProviderSimple,
         return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE Expand() override {
+    HRESULT STDMETHODCALLTYPE Expand() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
         if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
         return Target()->AutomationExpand() ? S_OK : UIA_E_INVALIDOPERATION;
     }
-    HRESULT STDMETHODCALLTYPE Collapse() override {
+    HRESULT STDMETHODCALLTYPE Collapse() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
         if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
         return Target()->AutomationCollapse() ? S_OK : UIA_E_INVALIDOPERATION;
     }
-    HRESULT STDMETHODCALLTYPE get_ExpandCollapseState(ExpandCollapseState* ret) override {
+    HRESULT STDMETHODCALLTYPE get_ExpandCollapseState(ExpandCollapseState* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -395,14 +396,14 @@ struct UiaNode final : IRawElementProviderSimple,
     }
 
     HRESULT STDMETHODCALLTYPE GetSelection(SAFEARRAY** ret) override;
-    HRESULT STDMETHODCALLTYPE get_CanSelectMultiple(BOOL* ret) override {
+    HRESULT STDMETHODCALLTYPE get_CanSelectMultiple(BOOL* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = (Target() && Target()->AutomationCanSelectMultiple()) ? TRUE : FALSE;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_IsSelectionRequired(BOOL* ret) override {
+    HRESULT STDMETHODCALLTYPE get_IsSelectionRequired(BOOL* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = {};
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -411,13 +412,13 @@ struct UiaNode final : IRawElementProviderSimple,
     }
 
     HRESULT STDMETHODCALLTYPE Select() override;
-    HRESULT STDMETHODCALLTYPE AddToSelection() override {
+    HRESULT STDMETHODCALLTYPE AddToSelection() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE; return Select(); }
-    HRESULT STDMETHODCALLTYPE RemoveFromSelection() override {
+    HRESULT STDMETHODCALLTYPE RemoveFromSelection() override { NativeCallbackScope callback;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE; return UIA_E_INVALIDOPERATION; }
     HRESULT STDMETHODCALLTYPE get_IsSelected(BOOL* ret) override;
     HRESULT STDMETHODCALLTYPE get_SelectionContainer(IRawElementProviderSimple** ret) override;
-    HRESULT STDMETHODCALLTYPE GetItem(int row, int column, IRawElementProviderSimple** ret) override {
+    HRESULT STDMETHODCALLTYPE GetItem(int row, int column, IRawElementProviderSimple** ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = nullptr;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -428,24 +429,24 @@ struct UiaNode final : IRawElementProviderSimple,
         *ret = cell;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_RowCount(int* ret) override {
+    HRESULT STDMETHODCALLTYPE get_RowCount(int* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = 0;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = Target() ? Target()->AutomationItemCount() : 0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_ColumnCount(int* ret) override {
+    HRESULT STDMETHODCALLTYPE get_ColumnCount(int* ret) override { NativeCallbackScope callback;
         if (!ret) return E_POINTER;
         *ret = 0;
         if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = Target() ? Target()->AutomationColumnCount() : 0;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_Row(int* ret) override { return CellCoordinate(ret, item_index); }
-    HRESULT STDMETHODCALLTYPE get_Column(int* ret) override { return CellCoordinate(ret, item_column); }
-    HRESULT STDMETHODCALLTYPE get_RowSpan(int* ret) override { return CellCoordinate(ret, 1); }
-    HRESULT STDMETHODCALLTYPE get_ColumnSpan(int* ret) override { return CellCoordinate(ret, 1); }
+    HRESULT STDMETHODCALLTYPE get_Row(int* ret) override { NativeCallbackScope callback; return CellCoordinate(ret, item_index); }
+    HRESULT STDMETHODCALLTYPE get_Column(int* ret) override { NativeCallbackScope callback; return CellCoordinate(ret, item_column); }
+    HRESULT STDMETHODCALLTYPE get_RowSpan(int* ret) override { NativeCallbackScope callback; return CellCoordinate(ret, 1); }
+    HRESULT STDMETHODCALLTYPE get_ColumnSpan(int* ret) override { NativeCallbackScope callback; return CellCoordinate(ret, 1); }
     HRESULT CellCoordinate(int* ret, int value) {
         if (!ret) return E_POINTER;
         *ret = 0;
@@ -453,7 +454,7 @@ struct UiaNode final : IRawElementProviderSimple,
         *ret = value;
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE get_ContainingGrid(IRawElementProviderSimple** ret) override {
+    HRESULT STDMETHODCALLTYPE get_ContainingGrid(IRawElementProviderSimple** ret) override { NativeCallbackScope callback;
         return get_SelectionContainer(ret);
     }
     static UiaState* StateOf(WindowImpl* w);
@@ -526,6 +527,7 @@ void UiaNode::CollectChildren(WindowImpl* w, Control* c, std::vector<Control*>& 
 }
 
 HRESULT UiaNode::GetPropertyValue(PROPERTYID id, VARIANT* ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     VariantInit(ret);
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -607,6 +609,7 @@ HRESULT UiaNode::GetPropertyValue(PROPERTYID id, VARIANT* ret) {
 }
 
 HRESULT UiaNode::get_BoundingRectangle(UiaRect* ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = {};
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -634,6 +637,7 @@ HRESULT UiaNode::get_BoundingRectangle(UiaRect* ret) {
 }
 
 HRESULT UiaNode::get_FragmentRoot(IRawElementProviderFragmentRoot** ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     // UIA 断开需要根身份；业务失效不影响身份，也不再触及 impl/control。
     *ret = IsRoot() ? static_cast<IRawElementProviderFragmentRoot*>(this)
@@ -643,6 +647,7 @@ HRESULT UiaNode::get_FragmentRoot(IRawElementProviderFragmentRoot** ret) {
 }
 
 HRESULT UiaNode::Navigate(NavigateDirection dir, IRawElementProviderFragment** ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = nullptr;
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -727,6 +732,7 @@ HRESULT UiaNode::Navigate(NavigateDirection dir, IRawElementProviderFragment** r
 }
 
 HRESULT UiaNode::ElementProviderFromPoint(double x, double y, IRawElementProviderFragment** ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = nullptr;
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -744,6 +750,7 @@ HRESULT UiaNode::ElementProviderFromPoint(double x, double y, IRawElementProvide
 }
 
 HRESULT UiaNode::GetFocus(IRawElementProviderFragment** ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = nullptr;
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -755,6 +762,7 @@ HRESULT UiaNode::GetFocus(IRawElementProviderFragment** ret) {
 }
 
 HRESULT UiaNode::GetSelection(SAFEARRAY** ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = nullptr;
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -783,6 +791,7 @@ HRESULT UiaNode::GetSelection(SAFEARRAY** ret) {
 }
 
 HRESULT UiaNode::Select() {
+    NativeCallbackScope callback;
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
     if (!Target()) return UIA_E_INVALIDOPERATION;
     if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
@@ -797,6 +806,7 @@ HRESULT UiaNode::Select() {
 }
 
 HRESULT UiaNode::get_IsSelected(BOOL* ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = {};
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
@@ -811,6 +821,7 @@ HRESULT UiaNode::get_IsSelected(BOOL* ret) {
 }
 
 HRESULT UiaNode::get_SelectionContainer(IRawElementProviderSimple** ret) {
+    NativeCallbackScope callback;
     if (!ret) return E_POINTER;
     *ret = nullptr;
     if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;

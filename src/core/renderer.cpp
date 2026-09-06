@@ -3,6 +3,7 @@
 #include "lumatext_bridge.h"
 #include "text_service.h"
 #include "lumen/Core.h"
+#include "lumen/App.h"
 #include <dwrite.h>
 #include <dwmapi.h>
 #include <wrl/client.h>  // 仅用 IID_PPV_ARGS 辅助
@@ -12,7 +13,45 @@ namespace lumen {
 LONG Renderer::flyout_depth_ = 0;
 
 Renderer::Renderer() = default;
-Renderer::~Renderer() = default;
+Renderer::~Renderer() { StopFrameTimer(); }
+
+void Renderer::StopFrameTimer() {
+    if (frame_timer_armed_ && hwnd_) KillTimer(hwnd_, kFrameTimerId);
+    frame_timer_armed_ = false;
+}
+
+void Renderer::RequestHostFrame() {
+    if (!hwnd_ || !IsWindowVisible(hwnd_) || IsIconic(GetAncestor(hwnd_, GA_ROOT))) {
+        StopFrameTimer();
+        return;
+    }
+    if (frame_timer_armed_) return;
+    const ULONGLONG now = GetTickCount64();
+    const UINT delay = next_frame_ms_ > now ? static_cast<UINT>(next_frame_ms_ - now) : 1u;
+    frame_timer_armed_ = SetTimer(hwnd_, kFrameTimerId, delay, nullptr) != 0;
+}
+
+bool Renderer::DeferHostFrame() {
+    if (!App::HostMode()) return false;
+    if (!hwnd_ || !IsWindowVisible(hwnd_) || IsIconic(GetAncestor(hwnd_, GA_ROOT))) {
+        StopFrameTimer();
+        next_frame_ms_ = 0;
+        return true;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (now < next_frame_ms_) { RequestHostFrame(); return true; }
+    StopFrameTimer();
+    next_frame_ms_ = now + kHostFrameIntervalMs;
+    return false;
+}
+
+bool Renderer::HandleFrameTimer(UINT_PTR id) {
+    if (id != kFrameTimerId) return false;
+    StopFrameTimer();
+    if (hwnd_ && IsWindowVisible(hwnd_) && !IsIconic(GetAncestor(hwnd_, GA_ROOT)))
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    return true;
+}
 
 void Renderer::FlyoutEnter() { InterlockedIncrement(&flyout_depth_); }
 void Renderer::FlyoutLeave() { InterlockedDecrement(&flyout_depth_); }
@@ -151,6 +190,7 @@ bool Renderer::EnsureRetain() {
 }
 
 void Renderer::ReleaseDeviceResources() {
+    present_pending_ = false;
     ready_ = false;
     if (luma_) luma_->Shutdown();
     if (dc_) dc_->SetTarget(nullptr);
@@ -170,6 +210,7 @@ void Renderer::ReleaseDeviceResources() {
 }
 
 void Renderer::Shutdown() {
+    StopFrameTimer();
     ReleaseDeviceResources();
     hwnd_ = nullptr;
 }
@@ -183,6 +224,7 @@ void Renderer::Resize(int width_px, int height_px) {
     dc_->SetTarget(nullptr);
     target_.reset();
     retain_.reset();
+    present_pending_ = false;
     const HRESULT hr = swapchain_->ResizeBuffers(0, static_cast<UINT>(width_px),
                                                  static_cast<UINT>(height_px),
                                                  DXGI_FORMAT_UNKNOWN, 0);
@@ -266,6 +308,8 @@ bool Renderer::EndDraw(bool wait_vsync, const RECT* dirty, UINT dirty_count) {
             return false;
         }
     }
+    // A deferred frame lives in retain_. Include all earlier dirty pixels in the retry.
+    if (present_pending_) { dirty = nullptr; dirty_count = 0; }
     RECT used[kMaxDirtyRects]{};
     UINT used_n = 0;
     if (dirty && dirty_count > 0) {
@@ -281,27 +325,31 @@ bool Renderer::EndDraw(bool wait_vsync, const RECT* dirty, UINT dirty_count) {
     const RECT* blit_dirty = used_n > 0 ? used : nullptr;
     if (!BlitRetainToSwapchain(blit_dirty, used_n)) return false;
     if (swapchain_) {
-        const UINT sync = wait_vsync ? 1u : 0u;
+        const bool host = App::HostMode();
+        const UINT sync = host ? 0u : (wait_vsync ? 1u : 0u);
+        const UINT flags = host ? DXGI_PRESENT_DO_NOT_WAIT : 0u;
         HRESULT presented = E_FAIL;
         if (used_n > 0) {
             DXGI_PRESENT_PARAMETERS params{};
             params.DirtyRectsCount = used_n;
             params.pDirtyRects = used;
-            presented = swapchain_->Present1(sync, 0, &params);
-            if (FAILED(presented) && !IsDeviceLost(presented)) {
+            presented = swapchain_->Present1(sync, flags, &params);
+            if (FAILED(presented) && presented != DXGI_ERROR_WAS_STILL_DRAWING && !IsDeviceLost(presented)) {
                 if (!BlitRetainToSwapchain(nullptr, 0)) return false;
-                presented = swapchain_->Present(sync, 0);
+                presented = swapchain_->Present(sync, flags);
             }
         } else {
-            presented = swapchain_->Present(sync, 0);
+            presented = swapchain_->Present(sync, flags);
         }
-        if (FAILED(presented) && IsDeviceLost(presented)) {
-            device_lost_ = true;
+        if (FAILED(presented)) {
+            present_pending_ = true;
+            if (IsDeviceLost(presented)) device_lost_ = true;
             return false;
         }
+        present_pending_ = false;
     }
     if (comp_) comp_->Commit();
-    if (wait_vsync) DwmFlush();
+    if (wait_vsync && !App::HostMode()) DwmFlush();
     return true;
 }
 

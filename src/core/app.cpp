@@ -1,5 +1,6 @@
 #include "lumen/App.h"
 #include "app_host.h"
+#include "native_callback.h"
 #include "hotkey.h"
 #include "log.h"
 #include "lumatext_bridge.h"
@@ -39,9 +40,10 @@ std::vector<GlobalHotkey> g_hotkeys;
 
 constexpr const wchar_t* kClassNames[] = {L"lumen_window", L"lumen_app", L"lumen_menu",
                                           L"lumen_popup"};
-bool g_class_registered[3] = {false, false, false};
+bool g_class_registered[std::size(kClassNames)]{};
 
 LRESULT CALLBACK AppWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    NativeCallbackScope callback;
     if (msg == WM_HOTKEY) {
         AppHandleHotkey(wparam);
         return 0;
@@ -131,7 +133,7 @@ bool EnsureLumenClass(LumenClass cls, WNDPROC proc, UINT style, bool arrow_curso
 }
 
 void UnregisterLumenClasses() {
-    for (size_t i = 0; i < 3; ++i) {
+    for (size_t i = 0; i < std::size(kClassNames); ++i) {
         if (!g_class_registered[i]) continue;
         if (!UnregisterClassW(kClassNames[i], LumenModule()) &&
             GetLastError() != ERROR_CLASS_DOES_NOT_EXIST)
@@ -244,9 +246,14 @@ void AppStartWorker(std::function<void()> work) {
         throw;
     }
 }
+bool App::HasActiveCallbacks() noexcept {
+    return detail::native_callbacks.load(std::memory_order_acquire) != 0;
+}
+
 bool App::CanShutdown() {
     // UIA 无引用且 RunAsync 任务全部结束才允许卸载：任务体可能仍在执行模块代码。
-    return UiaCanShutdown() && RunningTasks() == 0;
+    return !HasActiveCallbacks() && UiaCanShutdown() &&
+        detail::native_objects.load(std::memory_order_acquire) == 0 && RunningTasks() == 0;
 }
 void App::TaskBegin() noexcept { g_live_tasks.fetch_add(1, std::memory_order_relaxed); }
 void App::TaskEnd() noexcept { g_live_tasks.fetch_sub(1, std::memory_order_acq_rel); }
@@ -255,7 +262,7 @@ int App::RunningTasks() noexcept {
 }
 
 void App::Shutdown() {
-    if (!CanShutdown()) throw std::runtime_error("LUMEN is still shutting down: UIA providers or RunAsync tasks are active");
+    if (!CanShutdown()) throw std::runtime_error("LUMEN is still shutting down: native callbacks, UIA/OLE objects or RunAsync tasks are active");
     ReleaseMsgWindow();
     UnregisterLumenClasses();
     LumaTextResetProcessCaches();

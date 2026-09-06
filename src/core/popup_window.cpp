@@ -1,5 +1,6 @@
 #include "popup_window.h"
 #include "app_host.h"
+#include "native_callback.h"
 #include "log.h"
 #include "lumatext_bridge.h"
 #include "renderer.h"
@@ -50,6 +51,7 @@ void PopupWindow::RequestClose(WindowImpl* impl) {
 }
 
 void PopupWindow::Show(WindowImpl* impl, Control& content, const Control* anchor, float width) {
+    NativeCallbackScope callback;
     // 借用内容的阻塞 API 不能安全排队；重入请求不能在旧会话栈上再开一个窗口。
     if (!impl || !impl->Hwnd() || Active() || content.Parent() || content.window_) return;
     PopupWindow popup(impl);
@@ -198,7 +200,7 @@ bool PopupWindow::CreatePopup() {
     DpiContextScope dpi_scope(owner_);
     hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
         LumenClassName(LumenClass::Popup), L"", WS_POPUP, pos_.x, pos_.y, width_px_, height_px_,
-        owner_, nullptr, LumenModule(), this);
+        GetAncestor(owner_, GA_ROOT), nullptr, LumenModule(), this);
     if (!hwnd_) return false;
     renderer_ = std::make_unique<Renderer>();
     if (!renderer_->Init(hwnd_, width_px_, height_px_)) return false;
@@ -242,7 +244,7 @@ void PopupWindow::Dismiss() {
 }
 
 void PopupWindow::Paint() {
-    if (!renderer_ || !content_ || dismissed_) return;
+    if (!renderer_ || !content_ || dismissed_ || renderer_->DeferHostFrame()) return;
     if (renderer_->NeedsRecovery() && !renderer_->Recover()) return;
     ID2D1DeviceContext2* dc = renderer_->BeginDraw();
     if (!dc) return;
@@ -260,7 +262,10 @@ void PopupWindow::Paint() {
     if (content_height_ > viewport.h + 0.5f)
         painter_.DrawScrollThumb(MakeScrollThumb(viewport, content_height_, scroll_, 0.0f, true), theme_->scrollbar_thumb);
     painter_.EndFrame();
-    renderer_->EndDraw(true, nullptr, 0);
+    if (!renderer_->EndDraw(true, nullptr, 0)) {
+        if (App::HostMode()) renderer_->RequestHostFrame();
+        else InvalidateRect(hwnd_, nullptr, FALSE);
+    }
 }
 
 Point PopupWindow::ToLocal(POINT screen_px) const {
@@ -488,6 +493,7 @@ void PopupWindow::ForgetControl(WindowImpl* impl, const Control* control) {
 }
 
 LRESULT CALLBACK PopupWindow::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
+    NativeCallbackScope callback;
     if (msg == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
         auto* self = static_cast<PopupWindow*>(create->lpCreateParams);
@@ -509,6 +515,9 @@ LRESULT PopupWindow::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         Paint();
         return 0;
     }
+    case WM_TIMER:
+        if (renderer_ && renderer_->HandleFrameTimer(static_cast<UINT_PTR>(wparam))) return 0;
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
     case WM_ERASEBKGND: return 1;
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
     case WM_CAPTURECHANGED:

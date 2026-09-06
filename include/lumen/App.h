@@ -39,6 +39,10 @@ public:
     // 在UI/STA线程重试未完成的UIA断开；仍有 provider 引用或 RunAsync 任务未结束时
     // 返回 false——模块代码可能仍在后台线程执行，不能用「丢弃 UI 回调」代替任务结束。
     static bool CanShutdown();
+    // 只读快照：任意线程的原生/UIA/OLE 回调或阻塞菜单、弹层、拖动会话尚未退出。
+    // 宿主在 UI 线程开始破坏性清理前检查；不因活窗口或 provider 引用本身返回 true。
+    // false 不是跨线程卸载锁：宿主仍须阻止新任务，关闭窗口，再用 CanShutdown 最终验收。
+    static bool HasActiveCallbacks() noexcept;
     static void Shutdown();
     // 外部任务可成对使用 TaskBegin/TaskEnd；RunAsync 自行持有系统线程到完整退出。
     // RunningTasks 包含尚未退出的 RunAsync 线程（包括闭包/TLS 析构），并回收已退出线程。

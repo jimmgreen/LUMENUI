@@ -33,7 +33,7 @@
 - 径向渐变外停靠点使用同 RGB、alpha 0，避免 premultiplied 淡到黑产生黑边。
 - 聚光统一用 `Control::Spotlight`、`SpotlightCenter()` 和 `Painter::DrawSpotlight`；窗口输入路由当帧更新 `mouse_local_`，控件不另存聚光坐标、不用动画时钟平滑位置。仅进出渐显平滑 `spotlight_t_`；覆盖 `OnAnimate` 时保留基类推进。
 - 指数趋近用 `Control::EaseTo`，有时程位移用 `lumen::Tween` + `Ease`/`CubicBezier`，物理跟手用 `lumen::SpringMotion`（`include/lumen/Animate.h`）。计算在栈上，离屏 setter 将动画 `Snap` 到位。
-- 动画时钟在 Paint 中推进并随 `Present(1,0)` 垂直同步，不以 `WM_TIMER` 驱动视觉动画。持续动画仅在悬停、聚焦或显式播放时运行，不常驻 60fps 空转。
+- 动画时钟在 Paint 中推进；独立 App 随 `Present(1,0)` 垂直同步。`App::HostMode()` 使用 `Present(0, DXGI_PRESENT_DO_NOT_WAIT)`，不调用 `DwmFlush`；主窗、菜单与弹层合并一次性计时唤醒，默认约 60Hz，并在隐藏或静止时停止。`DXGI_ERROR_WAS_STILL_DRAWING` 保留 retain 与待呈现状态，下次全量拷贝提交覆盖先前脏区，不当作设备丢失或立即重试。持续动画仅在悬停、聚焦或显式播放时运行，不常驻 60fps 空转。
 - `CreateSwapChainForComposition` 必须 PREMULTIPLIED / STRETCH / FLIP_SEQUENTIAL。帧呈现先 `Present/Present1` 再 `DComp Commit`；脏区帧只将 retain 的脏矩形 `CopyFromBitmap` 到后缓冲，再 `Present1(pDirtyRects)`，保留未更新像素。
 - `ResizeBuffers` 前 `dc_->SetTarget(nullptr)` 并释放目标位图；同尺寸短路。`Renderer::Init` 先释放上一套设备链，无 HWND 或空客户区返回 false，避免构造期重复建设设备链后退到 WARP。
 
@@ -41,7 +41,7 @@
 
 - 新增进程级调用时在代码中检查 `App::HostMode()`。宿主模式不改进程 DPI、不 `EnableMouseInPointer`、最后一个窗口关闭不 `PostQuitMessage`；窗口通过 `DpiContextScope` 的 PMv2 线程上下文创建。进程设置、全局钩子及 COM 初始化需明确宿主分支和资源归属。
 - 窗口类与图标等模块资源用 `LumenModule()`（`app_host.h`），不用 `GetModuleHandleW(nullptr)` 取宿主 exe。类注册走 `EnsureLumenClass`，同名陈旧类先注销；所有窗口销毁且 `App::CanShutdown()` 确认 UIA/后台任务释放后，`App::Shutdown()` 注销全部类并 `UiText().Reset()`，恢复未 Ensure 状态。
-- `WindowSpec.owner` 为所有者 HWND（公共类型 `void*`）；`matchDpiHwnd` 用于 `SetParent` 嵌入时匹配 DPI 上下文。模态禁用宿主主窗由调用方负责。
+- `WindowSpec.owner` 为所有者 HWND（公共类型 `void*`）；`matchDpiHwnd` 用于兼容调用方自行 `SetParent`。`parent` 非空直接创建 `WS_CHILD` 并优先匹配父窗 DPI；`frameTarget` 指定原生外壳，Client 标题栏与 Resize 路由外壳，NativeHandle 保持为子窗。外壳负责尺寸布局、阴影和关闭；MinSize 通过外壳转发 WM_GETMINMAXINFO 给子窗执行。模态禁用宿主主窗由调用方负责。
 - `WM_KILLFOCUS` 清逻辑焦点并保留恢复目标；`WM_SETFOCUS` 恢复。公开 `Window::ClearFocus()` / `Control::Blur()` 同时清掉恢复目标。
 - 原生消息观察用 `OnNativeMessage` / `BindNativeMessage`，在默认处理前调用；公共签名用定宽整数与指针宽度整数，不引入 windows.h。回调不泵消息，也不用轮询 `GetFocus()` 代替消息观察。
 - `OleInitialize` / `OleUninitialize` 由 `ole_initialized_` 配对；只释放本窗口成功初始化取得的引用，不多退宿主的 COM 引用。
