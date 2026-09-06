@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(lumen VERSION 0.1.0 LANGUAGES CXX RC)
+project(lumen VERSION 0.2.0 LANGUAGES CXX RC)
 
 # 修正中文 VS18 / CMake 的 UTF-8 依赖前缀误解码，防止头文件漏编。
 if(MSVC AND CMAKE_CL_SHOWINCLUDES_PREFIX MATCHES "^娉ㄦ剰:")
@@ -19,8 +19,9 @@ endif()
 # ---- LumaText 文字渲染（可选；找到时启用，找不到时回退 DirectWrite）----
 option(LUMEN_WITH_LUMATEXT "Use LumaText for text rendering" ON)
 option(LUMEN_REQUIRE_LUMATEXT "Fail configure if LumaText is missing" OFF)
+option(LUMEN_USE_PREBUILT_LUMATEXT "Use find_package(LumaText) only; skip the sibling source probe" OFF)
 set(LUMATEXT_SOURCE_DIR "" CACHE PATH "Optional LumaText source tree for development builds")
-if(LUMEN_WITH_LUMATEXT AND NOT LUMATEXT_SOURCE_DIR AND PROJECT_IS_TOP_LEVEL)
+if(LUMEN_WITH_LUMATEXT AND NOT LUMEN_USE_PREBUILT_LUMATEXT AND NOT LUMATEXT_SOURCE_DIR AND PROJECT_IS_TOP_LEVEL)
     # 与 pulse 相同的约定：默认探测同级 ../lumatext
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../lumatext/CMakeLists.txt")
         set(LUMATEXT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lumatext" CACHE PATH
@@ -79,6 +80,12 @@ if(LUMEN_WITH_LUMATEXT)
             set(LUMEN_LUMATEXT_DLL "lumatext$<$<CONFIG:Debug>:d>.dll")
         endif()
         message(STATUS "lumen text renderer: LumaText (prebuilt)")
+    elseif(TARGET LumaText::Shared)
+        # lumatext 安装导出只含 Shared/Static；预编译包按 Shared 接入，运行时拷贝与 SDK 安装照常生效。
+        set(LUMEN_LUMATEXT_TARGET LumaText::Shared)
+        set(LUMEN_LUMATEXT_RUNTIME_TARGET LumaText::Shared)
+        set(LUMEN_LUMATEXT_DLL "lumatext$<$<CONFIG:Debug>:d>.dll")
+        message(STATUS "lumen text renderer: LumaText (prebuilt shared)")
     else()
         if(LUMEN_REQUIRE_LUMATEXT)
             message(FATAL_ERROR "LumaText not found")

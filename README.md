@@ -51,7 +51,7 @@ lumen_add_executable(myapp main.cpp app.rc)
 include(FetchContent)
 FetchContent_Declare(lumen
     GIT_REPOSITORY https://github.com/jimmgreen/LUMENUI.git
-    GIT_TAG v0.1.0)
+    GIT_TAG v0.2.0)
 FetchContent_MakeAvailable(lumen)
 lumen_add_executable(myapp main.cpp app.rc)
 
@@ -63,7 +63,7 @@ lumen_add_executable(myapp main.cpp app.rc)
 
 起步模板：`examples/template/`（`cmake -S . -B build`，带图标）。vcpkg overlay：`ports/lumen/`。非 CMake 工程 `#include <lumen/wmain.h>` 后写 `LUMEN_MAIN()`，不要再链 `lumen::main`。
 
-LumaText 缺失时 configure 会 `WARNING`，运行回退 DirectWrite；强制失败加 `-DLUMEN_REQUIRE_LUMATEXT=ON`。
+LumaText 缺失时 configure 会 `WARNING`，运行回退 DirectWrite；强制失败加 `-DLUMEN_REQUIRE_LUMATEXT=ON`。有预编译 LumaText 包（含 `lib/cmake/LumaText`）时，加 `-DLUMEN_USE_PREBUILT_LUMATEXT=ON` 和 `CMAKE_PREFIX_PATH` 直连，不再编译子目录源码。
 
 产品代码按需 include 单个控件头。三套最小集：
 
@@ -95,6 +95,8 @@ App::Shutdown();
 ```
 
 - 窗口在 PMv2 线程 DPI 上下文里创建，宿主进程即使只是 System Aware 也不发糊，且不改宿主的感知级别。
+- 原生嵌入用 `WindowSpec.parent`（直接创建 `WS_CHILD`，DPI 匹配父窗，`NativeHandle()` 返回子窗）；外壳接管布局与关闭时再加 `frameTarget`，Client 标题栏命中与 Resize 路由外壳。`matchDpiHwnd` 仅保留给调用方自行 `SetParent` 的兼容路径。
+- 卸载前先结束拖放、菜单与弹层会话（可用 `App::HasActiveCallbacks()` 轮询），所有 Window 析构后 `App::CanShutdown()` 通过再 `App::Shutdown()`；原生回调或 OLE 代理对象在途时会拒绝关停。
 - 窗口类挂在含 lumen 代码的模块上（注册时会先注销上次卸载遗留的同名类）；`Shutdown` 注销类、释放 DWrite/字体/布局缓存，进程回到未初始化态，重载 .arx 再建窗口会重新初始化。
 - 宿主模式最后一个窗口关闭不投 `WM_QUIT`，也不需要 `App::Run`。
 - 失焦会清逻辑焦点（HasFocus / 焦点环 / 插入符）；`ClearFocus()` / `Blur()` 显式清除且不在下次 SETFOCUS 时恢复。要把键盘还给宿主，调用方再 `SetFocus(owner)`。
