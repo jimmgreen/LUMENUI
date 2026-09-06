@@ -31,6 +31,11 @@ jobs:
           $hash = (Get-FileHash lumatext-prebuilt.zip -Algorithm SHA256).Hash
           if ($hash -ne $env:LUMATEXT_PREBUILT_SHA256) { throw "lumatext prebuilt hash mismatch: $hash" }
           Expand-Archive lumatext-prebuilt.zip -DestinationPath _deps
+          # 预编译包在 UTC+8 机器打包，UTC runner 解出的 mtime 在未来，CMake 会无限重生成
+          # （ninja: manifest 'build.ninja' still dirty after 100 tries）。钳到当前时间。
+          $clamp = (Get-Date).AddMinutes(-5)
+          Get-ChildItem _deps -Recurse -File | ForEach-Object { $_.LastWriteTime = $clamp }
+          Get-ChildItem _deps -Recurse -Directory | ForEach-Object { $_.LastWriteTime = $clamp }
           "LUMATEXT_PREFIX=$PWD/_deps/lumatext-prebuilt" >> $env:GITHUB_ENV
 
       - name: Setup MSVC
