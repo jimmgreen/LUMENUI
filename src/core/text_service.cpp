@@ -19,17 +19,17 @@ struct RoleSpec {
 };
 
 constexpr RoleSpec kRoles[] = {
-    {L"Segoe UI Variable Text", L"Segoe UI", 14.0f, DWRITE_FONT_WEIGHT_NORMAL, false, 0.0f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 14.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.0f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 12.0f, DWRITE_FONT_WEIGHT_NORMAL, true, 0.06f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 12.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.06f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 20.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, true, 0.0f},
-    {L"Segoe Fluent Icons", L"Segoe MDL2 Assets", 16.0f, DWRITE_FONT_WEIGHT_NORMAL, false, 0.0f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 12.0f, DWRITE_FONT_WEIGHT_NORMAL, true, 0.0f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 48.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.0f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 16.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.0f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 11.0f, DWRITE_FONT_WEIGHT_NORMAL, false, 0.06f},
-    {L"Segoe UI Variable Text", L"Segoe UI", 14.0f, DWRITE_FONT_WEIGHT_NORMAL, true, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Body).size, DWRITE_FONT_WEIGHT_NORMAL, false, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::BodyStrong).size, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Caption).size, DWRITE_FONT_WEIGHT_NORMAL, true, 0.06f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::CaptionStrong).size, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.06f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Title).size, DWRITE_FONT_WEIGHT_SEMI_BOLD, true, 0.0f},
+    {L"Segoe Fluent Icons", L"Segoe MDL2 Assets", TextRoleStyle(TextRole::Icon).size, DWRITE_FONT_WEIGHT_NORMAL, false, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Mono).size, DWRITE_FONT_WEIGHT_NORMAL, true, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Display).size, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Subtitle).size, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, 0.0f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Overline).size, DWRITE_FONT_WEIGHT_NORMAL, false, 0.06f},
+    {L"Segoe UI Variable Text", L"Segoe UI", TextRoleStyle(TextRole::Numeric).size, DWRITE_FONT_WEIGHT_NORMAL, true, 0.0f},
 };
 static_assert(std::size(kRoles) == kTextRoleCount);
 

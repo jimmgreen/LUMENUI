@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <cmath>
+#include <array>
 
 namespace lumen {
 
@@ -79,7 +80,10 @@ struct Color {
 enum class Align { Leading, Center, Trailing };
 enum class CrossAlign { Stretch, Start, Center, End };
 enum class MainAlign { Start, Center, End, SpaceBetween };
-// Subtitle 补 Title/Body 之间的档；Overline 为加字距小标题；Numeric 开表格数字。
+// 统一文字契约：字号单位为 DIP。控件应选择语义角色，不自行设置字号。
+// Body/BodyStrong=普通输入与区块标题；Caption/CaptionStrong=辅助信息与紧凑列表；
+// Title/Subtitle=页面标题；Numeric=工程数字；Mono=等宽数据；Icon=图标；
+// Display=大型展示数字；Overline=辅助小标题。
 enum class TextRole {
     Body,
     BodyStrong,
@@ -94,6 +98,21 @@ enum class TextRole {
     Numeric
 };
 inline constexpr size_t kTextRoleCount = 11;
+struct TextRoleSpec {
+    float size;
+    bool strong;
+    bool tracked;
+};
+inline constexpr std::array<TextRoleSpec, kTextRoleCount> kTextRoleSpecs{{
+    {14.0f, false, false}, {14.0f, true, false}, {12.0f, false, true},
+    {12.0f, true, false}, {20.0f, true, false}, {16.0f, false, false},
+    {12.0f, false, true}, {48.0f, true, false}, {16.0f, true, false},
+    {11.0f, false, true}, {14.0f, false, false},
+}};
+inline constexpr TextRoleSpec TextRoleStyle(TextRole role) noexcept {
+    const auto index = static_cast<size_t>(role);
+    return index < kTextRoleSpecs.size() ? kTextRoleSpecs[index] : kTextRoleSpecs[0];
+}
 enum class SliderOrientation { Horizontal, Vertical };
 
 inline float Lerp(float a, float b, float t) noexcept { return a + (b - a) * t; }

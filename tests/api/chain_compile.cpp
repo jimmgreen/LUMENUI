@@ -69,7 +69,16 @@ void PumpOnce() {
 }
 
 int main() {
+    Check(lumen::TextRoleStyle(lumen::TextRole::Body).size == 14.0f &&
+              lumen::TextRoleStyle(lumen::TextRole::Caption).size == 12.0f &&
+              lumen::TextRoleStyle(lumen::TextRole::Title).size == 20.0f &&
+              lumen::TextRoleStyle(lumen::TextRole::Subtitle).size == 16.0f &&
+              lumen::TextRoleStyle(lumen::TextRole::Numeric).size == 14.0f &&
+              lumen::TextRoleStyle(lumen::TextRole::Mono).size == 12.0f &&
+              lumen::TextRoleStyle(lumen::TextRole::Icon).size == 16.0f,
+          "text role size contract");
     lumen::Column host;
+    host.Add<lumen::TextBox>().Placeholder(L"hint").PlaceholderRole(lumen::TextRole::Caption);
     host.Add<lumen::TextBox>().Text(L"top;bottom").Select(4, 10).OnFocused([](bool) {});
     LUMEN_CHAIN(lumen::Panel);
     LUMEN_CHAIN(lumen::StackPanel);
@@ -474,6 +483,25 @@ int main() {
         std::weak_ptr<lumen::ItemsModel> weak = model;
         model.reset(); filtered.reset();
         Check(!weak.expired() && sorted.Count() == 2, "shared decorators retain source ownership");
+    }
+    {
+        struct UiaRow { int rank; std::wstring name; };
+        struct UiaTable : lumen::Table {
+            using Table::AutomationCellValue;
+            using Table::AutomationSetCellValue;
+        };
+        lumen::VectorModel<UiaRow> model;
+        model.Reset({{30, L"third"}, {10, L"first"}, {20, L"second"}});
+        UiaTable table;
+        table.Bind(model).Column(L"Rank", &UiaRow::rank, 80.0f).CellEditEnabled();
+        table.SortBy(0, 1);
+        Check(table.DataRowAt(0) == 1 && table.AutomationCellValue(0, 0) == L"10",
+              "UIA cell follows sorted business row");
+        Check(table.AutomationSetCellValue(0, 0, L"11") && model.At(1).rank == 11 && model.At(0).rank == 30,
+              "UIA edit writes sorted row identity");
+        model.RemoveAt(1);
+        Check(table.RowCount() == 2 && table.AutomationCellValue(0, 0) == L"20",
+              "UIA mapping remains valid after business row removal");
     }
     {
         lumen::VectorModel<std::wstring> model({L"a", L"b", L"c"});

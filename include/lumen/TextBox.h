@@ -34,6 +34,8 @@ public:
         Invalidate();
         return *this;
     }
+    TextBox& PlaceholderRole(TextRole role) { placeholder_role_ = role; Invalidate(); return *this; }
+    TextRole PlaceholderRole() const noexcept { return placeholder_role_; }
     const std::wstring& Glyph() const noexcept { return glyph_; }
     TextBox& Glyph(std::wstring_view value) {
         glyph_ = value;
@@ -191,6 +193,7 @@ protected:
     std::wstring mask_;
     std::wstring input_mask_;
     std::wstring placeholder_;
+    TextRole placeholder_role_ = TextRole::Body;
     std::wstring glyph_;
     std::wstring ime_comp_;
     bool ime_session_ = false;

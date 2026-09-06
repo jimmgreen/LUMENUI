@@ -1283,9 +1283,9 @@ void TextBox::Draw(Painter& painter, const Theme& theme) {
             const Rect ph{frame.x + pad, frame.y + top, ContentWidth(),
                           multiline_ ? std::max(0.0f, frame.h - top - kPadY) : frame.h};
             if (multiline_) {
-                painter.DrawTextWrapped(placeholder_, ph, ContentRole(), theme.text_secondary);
+                painter.DrawTextWrapped(placeholder_, ph, placeholder_role_, theme.text_secondary);
             } else {
-                painter.DrawText(placeholder_, ph, ContentRole(), theme.text_secondary);
+                painter.DrawText(placeholder_, ph, placeholder_role_, theme.text_secondary);
             }
         }
     } else if (multiline_) {
