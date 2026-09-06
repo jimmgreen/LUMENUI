@@ -41,7 +41,7 @@ void CheckBox::Cycle() {
 Size CheckBox::Measure(Size, const Theme&) {
     const float width = text_.empty() ? kBoxSize
                                       : kBoxSize + kGap +
-                                            MeasureText(text_, TextRole::BodyStrong).w;
+                                            MeasureText(text_, role_).w;
     return {width, 28.0f};
 }
 
@@ -88,8 +88,8 @@ void CheckBox::Draw(Painter& painter, const Theme& theme) {
                                      : theme.text_disabled;
         painter.DrawText(text_,
                          {absolute_.x + kBoxSize + kGap, absolute_.y,
-                          MeasureText(text_, TextRole::BodyStrong).w, absolute_.h},
-                         TextRole::BodyStrong, label);
+                           MeasureText(text_, role_).w, absolute_.h},
+                         role_, label);
     }
 }
 

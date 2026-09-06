@@ -47,6 +47,24 @@ public:
     }
     const std::wstring& Status() const noexcept { return status_; }
 
+    // 紧凑对话框可关掉最小化/最大化，仅保留关闭。
+    TitleBar& ShowMinimize(bool value) {
+        if (show_min_ == value) return *this;
+        show_min_ = value;
+        RelayoutParent();
+        Invalidate();
+        return *this;
+    }
+    bool ShowMinimize() const noexcept { return show_min_; }
+    TitleBar& ShowMaximize(bool value) {
+        if (show_max_ == value) return *this;
+        show_max_ = value;
+        RelayoutParent();
+        Invalidate();
+        return *this;
+    }
+    bool ShowMaximize() const noexcept { return show_max_; }
+
     // Interactive chrome in the middle (HitTransparent row so empty area stays Caption).
     StackPanel& Content() { return *content_; }
 
@@ -69,7 +87,8 @@ protected:
     bool OnAnimate(float dt_seconds) override;
     bool HitTransparent() const noexcept override { return true; }
 
-    Rect ButtonSlot(int index) const noexcept;
+    float ButtonsWidth() const noexcept;
+    Rect ButtonSlot(Region region) const noexcept;
     int HoverIndex() const noexcept;
     float CaptionStart() const noexcept;
     float TitleWidth(float bar_w) const;
@@ -82,6 +101,8 @@ protected:
     std::wstring status_;
     Region hover_ = Region::Caption;
     bool maximized_ = false;
+    bool show_min_ = true;
+    bool show_max_ = true;
     float min_glow_ = 0.0f;
     float max_glow_ = 0.0f;
     float close_glow_ = 0.0f;

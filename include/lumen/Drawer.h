@@ -47,6 +47,7 @@ protected:
     float panel_w_ = 320.0f;
     Tween slide_{};
     bool closing_ = false;
+    bool sliding_ = false;
     Signal<> closed_;
 };
 

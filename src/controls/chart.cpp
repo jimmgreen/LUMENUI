@@ -517,7 +517,7 @@ CursorShape Chart::CursorAt(Point local) const {
 bool Chart::OnAnimate(float dt_seconds) {
     bool more = Control::OnAnimate(dt_seconds);
     if (value_tween_.running) {
-        const bool still = value_tween_.Tick(dt_seconds);
+        const bool still = AdvanceAnimation(value_tween_, dt_seconds);
         const float t = value_tween_.Value();
         for (size_t i = 0; i < stored_; ++i) {
             const float a = (i < from_n_) ? from_[i] : 0.0f;

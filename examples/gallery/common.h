@@ -72,6 +72,7 @@ void BuildInput(lumen::StackPanel& column, lumen::Window& window);
 void BuildSelection(lumen::StackPanel& column, lumen::Window& window);
 void BuildLayout(lumen::StackPanel& column, lumen::Window& window);
 void BuildCollections(lumen::StackPanel& column, lumen::Window& window);
+void StartPlotLiveDemo(lumen::Window& window);
 void BuildNavigation(lumen::StackPanel& column, lumen::Window& window);
 void BuildOverlays(lumen::StackPanel& column, lumen::Window& window);
 void BuildStatus(lumen::StackPanel& column, lumen::Window& window);

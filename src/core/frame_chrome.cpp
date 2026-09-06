@@ -28,6 +28,9 @@ constexpr float kCaptionButtonDip = 46.0f;
 
 DWORD WindowImpl::FrameStyle() const {
     if (frame_ == Frame::Client) {
+        // 无标题栏：纯弹出层，不可拖边缩放、无系统菜单。
+        if (!title_bar_)
+            return WS_POPUP;
         return WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     }
     return WS_OVERLAPPEDWINDOW;
@@ -41,7 +44,11 @@ void WindowImpl::AdjustFrameRect(RECT* rect) const {
 }
 
 float WindowImpl::CaptionHeight() const noexcept {
-    if (title_bar_) return title_bar_->Height();
+    if (title_bar_ && title_bar_->Visible())
+        return title_bar_->Height();
+    // Client 但未建标题栏（titleBar=false）：无标题区。
+    if (!title_bar_)
+        return 0.0f;
     return frame_ == Frame::Client ? kCaptionDip : 0.0f;
 }
 
@@ -60,6 +67,16 @@ void WindowImpl::ApplyClientChrome() {
 }
 
 LRESULT WindowImpl::CaptionButtonAt(POINT client_px) const {
+    if (title_bar_) {
+        const Point dip{static_cast<float>(client_px.x) / scale_,
+                        static_cast<float>(client_px.y) / scale_};
+        switch (title_bar_->Hit(dip)) {
+        case TitleBar::Region::Min: return HTMINBUTTON;
+        case TitleBar::Region::Max: return HTMAXBUTTON;
+        case TitleBar::Region::Close: return HTCLOSE;
+        default: return 0;
+        }
+    }
     const float bw = kCaptionButtonDip * scale_;
     const float w = static_cast<float>(client_w_);
     const float x = static_cast<float>(client_px.x);

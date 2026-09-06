@@ -35,6 +35,13 @@ public:
     Label& Wrap(bool value) { wrap_ = value; RelayoutParent(); return *this; }
     // 文字辉光（text-glow）：8 向低透明晕染，仅建议用于标题类大字。
     Label& TextGlow(bool value) { glow_ = value; Invalidate(); return *this; }
+    // 字体族覆盖（App::AddFont 返回的族名或系统字体）；空 = 角色默认。字号/字重仍随 Role。
+    Label& FontFamily(std::wstring_view value) {
+        family_ = std::wstring(value);
+        RelayoutParent();
+        return *this;
+    }
+    const std::wstring& FontFamily() const noexcept { return family_; }
 
     template <class T, class Fmt>
     Label& BindText(Property<T>& p, Fmt fmt) {
@@ -64,6 +71,7 @@ protected:
     bool HitTransparent() const noexcept override { return true; }
 
     std::wstring text_;
+    std::wstring family_;
     TextRole role_ = TextRole::Body;
     Align align_ = Align::Leading;
     Color foreground_{0.0f, 0.0f, 0.0f, 0.0f};

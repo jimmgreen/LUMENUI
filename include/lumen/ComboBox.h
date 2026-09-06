@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace lumen {
+class TextBox;
 
 struct ComboGroup {
     std::wstring id;
@@ -52,6 +53,8 @@ public:
     ptrdiff_t SelectedDataIndex() const noexcept { return selected_; }
     ComboBox& SelectedIndex(ptrdiff_t index);   // -1 表示无选中；多选时同时保证该项在集合内
     std::wstring SelectedText() const;
+    uint64_t SelectedKey() const noexcept;
+    ComboBox& SelectKey(uint64_t key);
     ComboBox& Placeholder(std::wstring_view value) {
         placeholder_ = value;
         Invalidate();
@@ -59,6 +62,15 @@ public:
     }
     bool Editable() const noexcept { return editable_; }
     ComboBox& Editable(bool value);
+    const std::wstring& Text() const noexcept { return edit_text_; }
+    ComboBox& Text(std::wstring_view value);
+    TextBox& Editor();
+    void CommitText();
+    ComboBox& BindText(Property<std::wstring>& value);
+    ComboBox& OnTextChanged(std::function<void(std::wstring_view)> fn) { text_changed_.Subscribe(std::move(fn)); return *this; }
+    Connection BindTextChanged(std::function<void(std::wstring_view)> fn) { return text_changed_.Connect(std::move(fn)); }
+    ComboBox& OnTextCommitted(std::function<void(std::wstring_view)> fn) { text_committed_.Subscribe(std::move(fn)); return *this; }
+    Connection BindTextCommitted(std::function<void(std::wstring_view)> fn) { return text_committed_.Connect(std::move(fn)); }
 
     // 多选：下拉勾选切换且不关闭；锚点以可关闭 Chip 展示已选项。
     // 开启时关闭 Editable（键入走过滤与 Chip 互斥）。
@@ -89,6 +101,8 @@ public:
 protected:
     friend class WindowImpl;
     class DropdownPopup;
+    class EditField;
+    friend class EditField;
     friend class DropdownPopup;
     Size Measure(Size available, const Theme& theme) override;
     void Arrange(const Rect& absolute) override;
@@ -108,8 +122,8 @@ protected:
     bool AutomationSetValue(std::wstring_view value) override {
         if (!enabled_) return false;
         if (editable_) {
-            edit_text_ = std::wstring(value);
-            Invalidate();
+            Text(value);
+            CommitText();
             return true;
         }
         for (size_t i = 0; i < items_.size(); ++i) {
@@ -127,7 +141,7 @@ protected:
         if (!dropdown_open_) OpenPopup(false);
         return true;
     }
-    bool AutomationCollapse() override { return true; }
+    bool AutomationCollapse() override;
     int AutomationSelectedIndex() const noexcept override { return static_cast<int>(selected_); }
     int AutomationItemCount() const noexcept override { return static_cast<int>(items_.size()); }
     bool AutomationSelectIndex(int index) override {
@@ -158,10 +172,21 @@ protected:
     void SyncChips();
     bool ItemPicked(size_t data) const noexcept;
 
+    void ReloadModel();
+    void RememberSelection();
+    std::vector<uint64_t> item_keys_, selected_keys_;
+    uint64_t selected_key_ = 0;
     std::vector<std::wstring> items_;
     std::vector<ComboGroup> groups_;
     std::wstring placeholder_;
     std::wstring edit_text_;
+    std::wstring committed_text_;
+    EditField* editor_ = nullptr;
+    void EditChanged();
+    bool EditChar(wchar_t ch);
+    bool EditKey(uint32_t vk);
+    Signal<std::wstring_view> text_changed_, text_committed_;
+    ScopedConnection text_prop_, text_ctrl_;
     std::wstring jump_;
     ptrdiff_t selected_ = -1;
     std::vector<ptrdiff_t> selected_set_;

@@ -315,16 +315,16 @@ struct NavigationView::Impl {
             if (notify) invoked.Emit(items[index].id);
             return;
         }
-        selected = items[index].id;
+        const std::wstring next = items[index].id;
+        if (notify && !ApplyBoundPage(next)) return;
+        if (selected == next) return;
+        selected = next;
         for (size_t row = 0; row < rows.size(); ++row) {
             if (!rows[row].footer && rows[row].index == index) focus = static_cast<int>(row);
         }
         SyncPath();
-        if (notify) {
-            changed.Emit(selected);
-            ApplyBoundPage();
-        }
         owner->Invalidate();
+        if (notify) changed.Emit(selected);
     }
     void Select(int row, bool notify) {
         if (row < 0 || row >= static_cast<int>(rows.size())) return;
@@ -336,14 +336,14 @@ struct NavigationView::Impl {
                 if (notify) invoked.Emit(item.id);
                 return;
             }
-            selected = item.id;
+            const std::wstring next = item.id;
+            if (notify && !ApplyBoundPage(next)) return;
+            if (selected == next) return;
+            selected = next;
             focus = row;
             SyncPath();
-            if (notify) {
-                changed.Emit(selected);
-                ApplyBoundPage();
-            }
             owner->Invalidate();
+            if (notify) changed.Emit(selected);
         } else SelectItem(r.index, notify);
     }
 
@@ -359,13 +359,13 @@ struct NavigationView::Impl {
                     if (notify) invoked.Emit(item.id);
                     return;
                 }
-                selected.assign(id.begin(), id.end());
+                const std::wstring next(id);
+                if (notify && !ApplyBoundPage(next)) return;
+                if (selected == next) return;
+                selected = next;
                 SyncPath();
-                if (notify) {
-                    changed.Emit(selected);
-                    ApplyBoundPage();
-                }
                 owner->Invalidate();
+                if (notify) changed.Emit(selected);
                 return;
             }
         }
@@ -489,12 +489,23 @@ struct NavigationView::Impl {
         search_changed.Emit(query);
     }
 
-    void ApplyBoundPage() {
-        if (!page_host || selected.empty()) return;
-        page_host->Show(selected);
-        if (Control* parent = page_host->Parent()) {
-            if (auto* scroll = dynamic_cast<ScrollViewer*>(parent)) scroll->ScrollToY(0.0f);
+    bool ApplyBoundPage(std::wstring_view next) {
+        if (!page_host || next.empty()) return true;
+        WeakRef<NavigationView> alive(owner);
+        WeakRef<ScrollViewer> scroll(dynamic_cast<ScrollViewer*>(page_host->Parent()));
+        const std::wstring previous = page_host->Current();
+        if (previous == next) return true;
+        if (scroll) page_scroll[previous] = {scroll->OffsetX(), scroll->OffsetY()};
+        page_host->Show(next);
+        if (!alive || !page_host || page_host->Current() != next) return false;
+        if (scroll) {
+            if (owner->window_) owner->window_->LayoutNow();
+            if (!alive || !scroll) return false;
+            const auto found = page_scroll.find(std::wstring(next));
+            const Point offset = found == page_scroll.end() ? Point{} : found->second;
+            scroll->ScrollToX(offset.x, false).ScrollToY(offset.y, false);
         }
+        return true;
     }
 
     NavigationView* owner = nullptr;
@@ -502,7 +513,8 @@ struct NavigationView::Impl {
     AutoSuggestBox* search = nullptr;
     Breadcrumb* crumb = nullptr;
     Breadcrumb* bound_crumb = nullptr;
-    PageHost* page_host = nullptr;
+    WeakRef<PageHost> page_host;
+    std::unordered_map<std::wstring, Point> page_scroll;
     std::vector<NavigationItem> items;
     std::vector<NavigationItem> footer_items;
     std::vector<Row> rows;
@@ -703,7 +715,7 @@ Connection NavigationView::BindItemInvoked(std::function<void(std::wstring_view)
 }
 NavigationView& NavigationView::BindPages(PageHost& host) {
     impl_->page_host = &host;
-    impl_->ApplyBoundPage();
+    impl_->ApplyBoundPage(impl_->selected);
     return *this;
 }
 StackPanel& NavigationView::Page(std::wstring_view id) {

@@ -41,7 +41,7 @@ bool Expander::OnAnimate(float dt) {
     bool active = Control::OnAnimate(dt);
     active |= EaseTo(chevron_t_, expanded_ ? 1.0f : 0.0f, dt, 14.0f);
     if (open_tween_.running) {
-        open_tween_.Tick(dt);
+        AdvanceAnimation(open_tween_, dt);
         open_t_ = open_tween_.Value();
         RelayoutParent();
         active = true;

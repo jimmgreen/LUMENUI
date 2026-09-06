@@ -31,7 +31,8 @@ Size ProgressBar::Measure(Size, const Theme&) {
 }
 
 bool ProgressBar::OnAnimate(float dt_seconds) {
-    if (!indeterminate_) return Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    if (!indeterminate_ || MotionScale() <= 0.001f) return base;
     phase_ += dt_seconds;
     Invalidate();
     return true;

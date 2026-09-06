@@ -185,6 +185,11 @@ public:
     const std::wstring& AccessibleName() const noexcept { return Control::AccessibleName(); }
     bool Spotlight() const noexcept { return Control::Spotlight(); }
 
+    D& OnFocused(std::function<void(bool focused)> fn) {
+        Control::BindFocused(std::move(fn)).Release();
+        return Self();
+    }
+
     D& Visible(bool v) {
         Control::Visible(v);
         return Self();
@@ -202,6 +207,11 @@ public:
         return Self();
     }
     D& ToolTip(std::string_view utf8) { return ToolTip(U8(utf8)); }
+    float ToolTipDelay() const noexcept { return Control::ToolTipDelay(); }
+    D& ToolTipDelay(float seconds) {
+        Control::ToolTipDelay(seconds);
+        return Self();
+    }
     D& Grow(float weight = 1.0f) {
         Control::Grow(weight);
         return Self();
@@ -257,6 +267,10 @@ public:
     }
     D& Focus() {
         Control::Focus();
+        return Self();
+    }
+    D& Blur() {
+        Control::Blur();
         return Self();
     }
     D& Background(Color color) {
@@ -409,6 +423,11 @@ public:
         : tracks_{static_cast<float>(first), static_cast<float>(rest)...} {}
 
     Grid& Columns(int equal_columns);
+    Grid& MinColumnWidth(float width, int maximum_columns = 0) {
+        min_column_width_ = std::max(0.0f, width);
+        max_columns_ = std::max(0, maximum_columns);
+        Relayout(); return *this;
+    }
     Grid& Gap(float value) { return Gap(value, value); }
     Grid& Gap(float column, float row);
     Grid& Padding(float uniform) { return Padding(uniform, uniform); }
@@ -419,6 +438,8 @@ protected:
     void Arrange(const Rect& absolute) override;
 
     std::vector<float> tracks_;
+    float min_column_width_ = 0.0f;
+    int max_columns_ = 0;
     float gap_x_ = 0.0f;
     float gap_y_ = 0.0f;
     float padding_h_ = 0.0f;

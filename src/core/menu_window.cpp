@@ -1,4 +1,5 @@
 #include "menu_window.h"
+#include "app_host.h"
 #include "lumen/Animate.h"
 #include "lumen/Command.h"
 #include "lumen/Icons.h"
@@ -220,21 +221,13 @@ bool MenuWindow::CreatePopup(HWND owner, POINT screen_px) {
         }
     }
 
-    static const bool registered = [] {
-        WNDCLASSEXW wc{};
-        wc.cbSize = sizeof(wc);
-        wc.lpfnWndProc = &MenuWindow::WndProc;
-        wc.hInstance = GetModuleHandleW(nullptr);
-        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.lpszClassName = L"lumen_menu";
-        return RegisterClassExW(&wc) != 0;
-    }();
-    (void)registered;
+    EnsureLumenClass(LumenClass::Menu, &MenuWindow::WndProc, 0, true);
 
+    DpiContextScope dpi_scope;
     hwnd_ = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST,
-        L"lumen_menu", L"", WS_POPUP, screen_px.x, screen_px.y, width_px_, height_px_, owner,
-        nullptr, GetModuleHandleW(nullptr), this);
+        LumenClassName(LumenClass::Menu), L"", WS_POPUP, screen_px.x, screen_px.y, width_px_,
+        height_px_, owner, nullptr, LumenModule(), this);
     if (!hwnd_) {
         Log(L"menu CreateWindow fail lastError=%lu pos=(%ld,%ld) size=(%d,%d)", GetLastError(),
             screen_px.x, screen_px.y, width_px_, height_px_);

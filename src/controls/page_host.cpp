@@ -31,6 +31,7 @@ StackPanel& PageHost::Page(std::wstring_view id) {
     const size_t found = Find(id);
     if (found != kNone) return static_cast<StackPanel&>(Child(found));
     ids_.emplace_back(id);
+    page_focus_.emplace_back();
     auto& page = Add<Column>();
     page.FillCross();
     if (current_ == kNone) {
@@ -50,6 +51,15 @@ float PageHost::DurationOrSnap(float seconds) const {
 PageHost& PageHost::Show(std::wstring_view id) {
     const size_t next = Find(id);
     if (next == kNone || next == current_) return *this;
+    WeakRef<PageHost> live(this);
+    if (before_leave_ && !before_leave_(Current(), id)) return *this;
+    if (!live) return *this;
+    if (window_ && current_ < ChildCount()) {
+        Control* focused = window_->Focused();
+        for (Control* node = focused; node; node = node->Parent()) {
+            if (node == &Child(current_)) { page_focus_[current_] = focused; break; }
+        }
+    }
     FinishOutgoing();
     outgoing_ = current_;
     current_ = next;
@@ -85,6 +95,15 @@ PageHost& PageHost::Show(std::wstring_view id) {
     }
     RelayoutParent();
     Invalidate();
+    if (window_ && page_focus_[current_]) {
+        auto self = std::make_shared<WeakRef<PageHost>>(this);
+        const size_t target = current_;
+        window_->Post([self, target] {
+            if (*self && (*self)->current_ == target && (*self)->page_focus_[target])
+                (*self)->page_focus_[target]->Focus();
+        });
+    }
+    changed_.Emit(Current());
     return *this;
 }
 
@@ -123,11 +142,11 @@ void PageHost::Draw(Painter&, const Theme&) {}
 bool PageHost::OnAnimate(float dt) {
     bool more = Control::OnAnimate(dt);
     if (enter_.running) {
-        more = enter_.Tick(dt) || more;
+        more = AdvanceAnimation(enter_, dt) || more;
         Invalidate();
     }
     if (outgoing_ != kNone) {
-        more = exit_.Tick(dt) || more;
+        more = AdvanceAnimation(exit_, dt) || more;
         if (!exit_.running) FinishOutgoing();
         Invalidate();
     }

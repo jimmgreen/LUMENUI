@@ -35,6 +35,20 @@ class LumaTextBridge;
 struct Theme;
 class Control;
 
+// 作用域内所有按 TextRole 取格式的绘制/测量改用该字体族（App::AddFont 注册的或系统已装的）。
+// 空串 = 角色默认；族名不存在时静默回落到角色默认。family 必须活过作用域。
+// 用法：Measure/Draw 顶部 `FontFamilyScope scope(family_);`。
+class FontFamilyScope {
+public:
+    explicit FontFamilyScope(std::wstring_view family) noexcept;
+    ~FontFamilyScope();
+    FontFamilyScope(const FontFamilyScope&) = delete;
+    FontFamilyScope& operator=(const FontFamilyScope&) = delete;
+
+private:
+    bool pushed_ = false;
+};
+
 class Painter {
 public:
     Painter() = default;
@@ -111,8 +125,13 @@ public:
     // 单行文本，超出宽度自动省略号截断；垂直居中并做物理像素对齐。
     // 默认 LumaText；仅旋转 / 斜切 / 非等比缩放回退 DirectWrite。
     void DrawText(std::wstring_view text, const Rect& r, TextRole role, Color color,
-                  Align align = Align::Leading, float max_width = 0.0f);
+                    Align align = Align::Leading, float max_width = 0.0f);
+    // 为随后同参数 DrawText 预备字形/省略布局，必须在控件 Prepare 阶段调用。
+    void PrepareText(std::wstring_view text, const Rect& r, TextRole role, Color color,
+                     Align align = Align::Leading, float max_width = 0.0f);
     Size MeasureText(std::wstring_view text, TextRole role, float max_width = 0.0f);
+    // 混排分段使用字形步进，不能累计 MeasureText 的墨迹外扩。
+    float AdvanceText(std::wstring_view text, TextRole role);
     // 多行换行文本；返回实际占用高度。
     float DrawTextWrapped(std::wstring_view text, const Rect& r, TextRole role, Color color,
                           Align align = Align::Leading);
@@ -120,6 +139,9 @@ public:
 
     // Phosphor Regular (256 viewBox) centered; unknown glyphs fall back to Segoe Fluent Icons.
     // weight < 0 uses icon_weight_ (default 1.5: fill + extra stroke, Bold-ish).
+    void PrepareColor(Color color);
+    void PrepareIcon(std::wstring_view glyph, const Rect& r, float size, Color color,
+                     Align align = Align::Center);
     void DrawIcon(std::wstring_view glyph, const Rect& r, float size, Color color,
                   Align align = Align::Center, float weight = -1.f);
     // Defaults: size 16, weight icon_weight_ (1.5). Same look as control chrome.

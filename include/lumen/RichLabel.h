@@ -1,4 +1,4 @@
-// lumen/RichLabel.h — 混排正文：普通 / 加粗 / 次要 / 内联链接，按容器宽换行。
+// lumen/RichLabel.h — 混排正文：普通 / 加粗 / 次要 / 内联链接 / 指定字体族，按容器宽换行。
 // Events: 无（本头无订阅事件）
 // Keys: 无独立快捷键（命中穿透或非焦点）
 // Layout: Grow / FillCross / Margin 走 ControlOf；默认尺寸见 Measure
@@ -16,6 +16,8 @@ public:
     RichLabel& Strong(std::wstring_view text);
     RichLabel& Secondary(std::wstring_view text);
     RichLabel& Link(std::wstring_view text, std::function<void()> on_click);
+    // 指定字体族的正文段（App::AddFont 的族名或系统字体）：符号字体 + 默认字体数字混排。
+    RichLabel& Font(std::wstring_view text, std::wstring_view family);
     RichLabel& Clear();
 
 protected:
@@ -32,6 +34,7 @@ protected:
         std::wstring text;
         RunKind kind = RunKind::Body;
         std::function<void()> click;
+        std::wstring family;
     };
     struct Seg {
         size_t run = 0;

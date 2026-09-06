@@ -8,6 +8,7 @@
 #include "Signal.h"
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace lumen {
 
@@ -72,6 +73,19 @@ public:
     bool HasError() const noexcept { return !error_.empty(); }
 
     FormField& Validate(validate::Rule rule);
+    FormField& LabelWidth(float width) { label_width_ = std::max(0.0f, width); RelayoutParent(); return *this; }
+    FormField& ValueSource(std::function<std::wstring()> read) { value_reader_ = std::move(read); Revalidate(); return *this; }
+    template<class T>
+    FormField& Watch(Property<T>& value) {
+        auto self = std::make_shared<WeakRef<FormField>>(this);
+        external_conns_.emplace_back(value.OnChanged([self](const T&) { if (*self) (*self)->Revalidate(); }));
+        Revalidate(); return *this;
+    }
+    FormField& Observe(Connection connection) { external_conns_.emplace_back(std::move(connection)); return *this; }
+
+    // 立即用当前子控件值重跑校验（程序赋值是静默的，改完值后调用；
+    // NumberBox 的值提交/步进会自动重验）。无校验规则时 no-op。
+    void Revalidate();
 
     using Panel::Child;
 
@@ -79,6 +93,7 @@ public:
     FormField& Child(T&& x) {
         AdoptOne(std::forward<T>(x));
         hooked_ = false;
+        EnsureHooked();   // 配置阶段即挂钩：首次布局前 Valid 就可信
         Relayout();
         return *this;
     }
@@ -94,13 +109,17 @@ protected:
     void AttachForm(Form* form) noexcept { form_ = form; }
     void EnsureHooked();
     void ApplyValidation(std::wstring_view text);
+    std::wstring FieldText() const;
 
     std::wstring label_;
     std::wstring description_;
     std::wstring error_;
     validate::Rule validator_;
+    std::function<std::wstring()> value_reader_;
+    std::vector<ScopedConnection> external_conns_;
+    float label_width_ = 0.0f, body_left_ = 0.0f;
     Form* form_ = nullptr;
-    ScopedConnection validate_conn_;
+    std::vector<ScopedConnection> validate_conns_;   // 文本输入 + 数字值提交双通道
     float header_h_ = 0.0f;
     float footer_h_ = 0.0f;
     float desc_h_ = 0.0f;
@@ -115,9 +134,19 @@ public:
     Property<bool>& Valid() noexcept { return valid_; }
     const Property<bool>& Valid() const noexcept { return valid_; }
     void RefreshValid();
+    // 提交校验：对所有字段立即重跑规则（覆盖程序赋值、数字步进等静默路径），
+    // 返回整表当前是否有效。业务提交前调用，不依赖下一次布局。
+    bool ValidateAll();
+    bool CommitAll();
+    Form& Validate(std::function<std::wstring()> rule) { cross_rule_ = std::move(rule); RefreshValid(); return *this; }
+    const std::wstring& Error() const noexcept { return cross_error_; }
 
 private:
     Property<bool> valid_{true};
+    std::function<std::wstring()> cross_rule_;
+    std::wstring cross_error_;
+    bool refreshing_valid_ = false;
+    bool refresh_pending_ = false;
 };
 
 } // namespace lumen

@@ -2,6 +2,7 @@
 #include "lumen/Icons.h"
 #include "lumen/Painter.h"
 #include "../core/text_service.h"
+#include "../core/window_impl.h"
 #include <windows.h>
 #include <algorithm>
 
@@ -25,10 +26,11 @@ Stepper& Stepper::Current(size_t index) {
     const float from = static_cast<float>(current_);
     current_ = clamped;
     // 步进序号空间补间：跨多步跳转时进度头依次扫过中间线段。
-    if (window_ && step_x_.size() == titles_.size()) {
-        flow_.Play(from, static_cast<float>(clamped), 0.45f, Ease::Material);
-        pop_.delay = 0.18f;   // 圆点在线段亮头到达后弹出
-        pop_.Play(0.0f, 1.0f, 0.35f, Ease::OutBack);
+    if (window_ && MotionScale() > 0.001f && step_x_.size() == titles_.size()) {
+        const Theme& theme = WindowImpl::ThemeOf(window_);
+        flow_.Play(from, static_cast<float>(clamped), theme.duration_slow * MotionScale(), theme.ease_standard);
+        pop_.delay = theme.duration_fast * MotionScale();
+        pop_.Play(0.0f, 1.0f, theme.duration_normal * MotionScale(), Ease::OutBack);
         pop_ready_ = true;
         Animate();
     } else {
@@ -67,14 +69,14 @@ Size Stepper::Measure(Size, const Theme&) {
 }
 
 bool Stepper::OnAnimate(float dt) {
-    bool more = false;
+    bool more = Control::OnAnimate(dt);
     if (flow_.running) {
-        flow_.Tick(dt);
-        more = true;
+        more |= AdvanceAnimation(flow_, dt);
+        Invalidate();
     }
     if (pop_.running) {
-        pop_.Tick(dt);
-        more = true;
+        more |= AdvanceAnimation(pop_, dt);
+        Invalidate();
     }
     return more;
 }

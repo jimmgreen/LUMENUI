@@ -3,15 +3,37 @@
 #include "resources/resource.h"
 #include <lumen/Main.h>
 #include <sstream>
+#include <string>
 
-int lumen_main(std::span<const std::wstring_view>) {
+int lumen_main(std::span<const std::wstring_view> args) {
     using namespace lumen;
     using namespace gallery;
+
+    std::wstring start_page = L"overview";
+    bool sim_print = false;
+    int quit_ms = 0;
+    bool skip_exe = true;
+    for (const std::wstring_view arg : args) {
+        if (skip_exe) {
+            skip_exe = false;
+            continue;
+        }
+        if (arg == L"--sim-print") {
+            sim_print = true;
+            continue;
+        }
+        if (arg.size() > 10 && arg.substr(0, 10) == L"--quit-ms=") {
+            quit_ms = std::stoi(std::wstring(arg.substr(10)));
+            continue;
+        }
+        if (!arg.empty() && arg[0] != L'-') start_page = std::wstring(arg);
+    }
 
     App app;
     Window window(L"LUMEN Gallery", {kWinW, 860.0f}, Frame::Client);
     window.MinSize({960.0f, 640.0f});
     window.Backdrop(Backdrop::All);
+    window.PerfHud(true);
     window.Icon(IDR_LUMEN_GALLERY_ICO);
     window.BindShortcut(L"F12", [&window] {
         std::wostringstream out;
@@ -66,7 +88,19 @@ int lumen_main(std::span<const std::wstring_view>) {
     BuildStatus(add_page(L"status"), window);
     BuildCharts(add_page(L"charts"), window);
 
-    nav.Navigate(L"overview");
+    nav.Navigate(start_page);
+    if (sim_print) StartPlotLiveDemo(window);
+    Connection quit_frame;
+    int quit_frames = 0;
+    if (quit_ms > 0) {
+        const int quit_need = quit_ms < 16 ? 1 : quit_ms / 16;
+        quit_frame = window.OnFrame([&](float) {
+            ++quit_frames;
+            if (quit_frames < quit_need) return true;
+            App::Quit(0);
+            return false;
+        });
+    }
 
     auto& status = root.Add<StatusBar>();
     status.Path(L"examples\\gallery").CountText(L"Ready").Zoom(L"100%");

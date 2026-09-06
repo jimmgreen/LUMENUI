@@ -1,8 +1,11 @@
 // visual — 视觉回归：离屏渲染 LUMEN 控件状态板 → PNG + 像素断言（单暗色主题）。
 #include "lumen/lumen.h"
 #include "core/offscreen.h"
+#include "core/lumatext_bridge.h"
 #include "core/text_service.h"
+#include "core/renderer.h"
 #include <objbase.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -191,6 +194,9 @@ struct TestTabs : TabControl {
     bool Overflows() const { return StripOverflows(); }
 };
 struct TestComboBox : ComboBox {
+    using ComboBox::AutomationExpand;
+    using ComboBox::AutomationExpandState;
+    using ComboBox::AutomationCollapse;
     using ComboBox::OnChar;
     using ComboBox::OnKey;
     using ComboBox::OnAnimate;
@@ -275,10 +281,12 @@ struct TestBreadcrumb : Breadcrumb {
 };
 
 struct TestTable : Table {
+    using Table::Measure;
     using Table::AutomationItemName;
     using Table::OnMouseDown;
     using Table::OnMouseMove;
     using Table::OnMouseUp;
+    using Table::OnMouseLeave;
     using Table::OnMouseDoubleClick;
     using Table::CommitCellEdit;
     using Table::CancelCellEdit;
@@ -286,6 +294,7 @@ struct TestTable : Table {
     using Table::MaxHorizontalScroll;
     using Table::OnWheel;
     using Table::OnKey;
+    using Table::ToolTipAnchor;
     using Table::Arrange;
     using Table::RowTop;
     using Table::ShowContextMenu;
@@ -294,6 +303,7 @@ struct TestTable : Table {
     Control* SlotControl(size_t i) { return i < slots_.size() ? slots_[i].control : nullptr; }
     void Commit() { CommitCellEdit(); }
     void Cancel() { CancelCellEdit(); }
+    void BeginEdit(ptrdiff_t row, int col) { BeginCellEdit(row, col); }
     Table::CellEditor* Editor() { return cell_editor_; }
 };
 struct TestSplitView : SplitView {
@@ -650,6 +660,10 @@ void TestInteraction() {
         SendMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 0);
         Check(combo.SelectedIndex() == 9999, "combo virtual popup selects last of 10000");
         Check(combo.HasFocus(), "combo popup restores anchor focus");
+        Check(combo.AutomationExpand() && combo.AutomationExpandState() == 1,
+              "UIA expands combo popup");
+        Check(combo.AutomationCollapse() && combo.AutomationExpandState() == 0,
+              "UIA collapse actually closes combo popup");
         combo.Editable(false).SelectedIndex(-1).Editable(true);
         combo.OnChar(L'9');
         SendMessageW(hwnd, WM_CHAR, L'9', 0);
@@ -1157,6 +1171,20 @@ void TestInteraction() {
 
     {
         TestTextBox box;
+        box.Text(L"top;bottom");
+        box.Select(4, 10);
+        Check(box.HasSelection() && box.SelectionStart() == 4 && box.SelectionEnd() == 10,
+              "textbox public select sets range");
+        box.Select(10, 4);
+        Check(box.SelectionStart() == 4 && box.SelectionEnd() == 10,
+              "textbox public select normalizes reverse range");
+        box.Select(999, 999);
+        Check(!box.HasSelection() && box.SelectionStart() == box.Text().size(),
+              "textbox public select clamps range");
+    }
+
+    {
+        TestTextBox box;
         box.MaxLength(3);
         box.OnChar(L'a');
         box.OnChar(L'b');
@@ -1504,14 +1532,42 @@ void TestInteraction() {
         root.Measure({240.0f, 220.0f}, theme);
         root.Arrange({0.0f, 0.0f, 240.0f, 220.0f});
 
+        table.CellEditEnabled(true);
+        table.OnMouseDoubleClick({120.0f, 32.0f + 14.0f});
+        Check(table.Editor() && table.Editor()->Visible(), "column visibility starts with editor");
+        std::vector<std::pair<int, bool>> visibility_changes;
+        int bound_visibility_changes = 0;
+        table.OnColumnVisibilityChanged([&](int col, bool visible) {
+            visibility_changes.emplace_back(col, visible);
+            Check(table.ColumnVisible(col) == visible, "column visibility callback sees new state");
+            Check(!table.Editor() || !table.Editor()->Visible(),
+                  "column visibility callback sees no active editor");
+        });
+        auto visibility_connection = table.BindColumnVisibilityChanged([&](int, bool) {
+            ++bound_visibility_changes;
+        });
         table.ColumnVisible(1, false);
         table.ColumnVisible(2, false);
         Check(table.ColumnVisible(0) && !table.ColumnVisible(1) && !table.ColumnVisible(2),
               "column hide");
         table.ColumnVisible(0, false);
         Check(table.ColumnVisible(0), "cannot hide last remaining column");
+        table.ColumnVisible(2, false);
+        table.ColumnVisible(-1, false);
+        table.ColumnVisible(3, true);
+        Check(visibility_changes.size() == 2 && bound_visibility_changes == 2,
+              "column visibility no-op and rejected changes emit nothing");
         table.ColumnVisible(1, true);
         table.ColumnVisible(2, true);
+        table.ColumnVisible(2, true);
+        Check(visibility_changes == std::vector<std::pair<int, bool>>{
+                  {1, false}, {2, false}, {1, true}, {2, true}} &&
+              bound_visibility_changes == 4, "column visibility events preserve hide and show order");
+        visibility_connection.Disconnect();
+        table.ColumnVisible(2, false);
+        table.ColumnVisible(2, true);
+        Check(visibility_changes.size() == 6 && bound_visibility_changes == 4,
+              "column visibility binding disconnects independently");
 
         table.MoveColumn(1, 0);
         Check(table.ColumnAt(20.0f) == 1, "move column visual order");
@@ -1723,11 +1779,13 @@ void TestExtras() {
         Check(std::wstring(ToastKindGlyph(ToastKind::Info)) == icon::kInfo, "toast info glyph");
         ToastData data;
         Check(data.duration > 2.0f && data.kind == ToastKind::Default, "toast data defaults");
+        data.title = L"Saved";
         data.text = L"saved";
         data.action = L"undo";
         data.duration = 0.0f;
         data.kind = ToastKind::Success;
-        Check(data.action == L"undo" && data.duration <= 0.0f, "toast data action and persist");
+        Check(data.title == L"Saved" && data.action == L"undo" && data.duration <= 0.0f,
+              "toast data title, action and persist");
     }
     {
         auto tip = std::make_unique<ToolTip>();
@@ -2461,7 +2519,7 @@ void TestExtras() {
         auto& field = root.Add<TestFormField>(L"Name");
         field.Required(true);
         auto& box = field.Add<TextBox>();
-        box.Placeholder(L"Project");
+        box.Placeholder(L"Project").Text(L"Example");
         root.Measure({400.0f, 2000.0f}, theme);
         root.Arrange({0.0f, 0.0f, 400.0f, 200.0f});
         Check(field.Required() && field.Label() == L"Name", "form field required label");
@@ -3073,6 +3131,73 @@ void TestExtras() {
             renderer.Shutdown();
         }
     }
+    {
+        OffscreenRenderer renderer;
+        if (!renderer.Init(640, 280)) {
+            Check(false, "table live reset renderer");
+        } else {
+            struct LiveRow {
+                bool checked = true;
+                std::wstring title;
+                std::wstring paper;
+                std::wstring out_name;
+                std::wstring status;
+                float progress = 0.0f;
+            };
+            VectorModel<LiveRow> model;
+            std::vector<LiveRow> rows(11);
+            for (size_t i = 0; i < rows.size(); ++i) {
+                rows[i].title = L"S" + std::to_wstring(i + 1);
+                rows[i].paper = L"A0";
+                rows[i].out_name = std::to_wstring(i + 1) + L".pdf";
+                rows[i].status = L"Q";
+            }
+            model.Map([](const LiveRow& item, ItemRow& out) {
+                out.cells = {item.checked ? L"1" : L"0", item.title, item.paper, item.out_name, L"",
+                             item.status};
+            });
+            model.Reset(rows);
+            TestRoot host;
+            auto& table = host.Add<Table>();
+            table.Bind(model);
+            table.AddColumn(L"On", 56.0f).CheckBox(
+                [&rows](size_t i) { return i < rows.size() && rows[i].checked; },
+                [&rows](size_t i, bool v) {
+                    if (i < rows.size()) rows[i].checked = v;
+                });
+            table.AddColumn(L"Title");
+            table.AddColumn(L"Paper", 80.0f).TextBox(
+                [&rows](size_t i) { return i < rows.size() ? rows[i].paper : std::wstring{}; },
+                [&rows](size_t i, std::wstring v) {
+                    if (i < rows.size()) rows[i].paper = std::move(v);
+                });
+            table.AddColumn(L"File");
+            table.AddColumn(L"Load", 120.0f).Progress(
+                [&rows](size_t i) { return i < rows.size() ? rows[i].progress : 0.0f; });
+            table.AddColumn(L"State", 80.0f);
+            host.Measure({620.0f, 260.0f}, theme);
+            host.Arrange({8.0f, 8.0f, 620.0f, 252.0f});
+            bool draw_ok = true;
+            for (int frame = 0; frame < 40; ++frame) {
+                LiveRow& row = rows[static_cast<size_t>(frame % 11)];
+                row.progress = std::min(1.0f, row.progress + 0.2f);
+                row.status = L"P";
+                model.Reset(rows);
+                ID2D1DeviceContext2* dc = renderer.BeginDraw();
+                Painter painter;
+                painter.BeginFrame(dc, &UiText(), 1.0f);
+                painter.FillRect({0.0f, 0.0f, 640.0f, 280.0f}, theme.bg);
+                DrawControlTree(painter, theme, &host);
+                painter.EndFrame();
+                if (!renderer.EndDraw()) {
+                    draw_ok = false;
+                    break;
+                }
+            }
+            Check(draw_ok, "table live reset enddraw");
+            renderer.Shutdown();
+        }
+    }
 }
 
 void RenderListScene(const wchar_t* path) {
@@ -3438,6 +3563,454 @@ void TestTypography() {
     const float untracked = UiText().MeasureText(L"WWWW", TextRole::Numeric).w;
     // Caption 12px + 0.06em 字距，Numeric 14px 无字距；字距使 Caption 不至于明显窄于更大的 Numeric。
     Check(tracked + 4.0f > untracked * (12.0f / 14.0f), "caption tracking widens");
+}
+
+std::vector<std::byte> ReadAllBytes(const std::wstring& path) {
+    std::vector<std::byte> bytes;
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, path.c_str(), L"rb") != 0 || !file) return bytes;
+    std::fseek(file, 0, SEEK_END);
+    const long size = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
+    if (size > 0) {
+        bytes.resize(static_cast<size_t>(size));
+        if (std::fread(bytes.data(), 1, bytes.size(), file) != bytes.size()) bytes.clear();
+    }
+    std::fclose(file);
+    return bytes;
+}
+
+// 自定义字体：拿系统 Consolas 文件当"内嵌资源"，验证内存注册、族名回报、作用域覆盖与回落。
+void TestCustomFonts() {
+    wchar_t windows[MAX_PATH]{};
+    GetWindowsDirectoryW(windows, MAX_PATH);
+    const std::wstring path = std::wstring(windows) + L"\\Fonts\\consola.ttf";
+    const std::vector<std::byte> bytes = ReadAllBytes(path);
+    if (bytes.empty()) {
+        std::printf("[SKIP] consola.ttf not found\n");
+        return;
+    }
+    const std::wstring family = App::AddFont(std::span<const std::byte>(bytes));
+    Check(family == L"Consolas", "AddFont memory returns family name");
+    Check(App::AddFont(path) == L"Consolas", "AddFont file returns family name");
+
+    const float body = UiText().MeasureText(L"iiii", TextRole::Body).w;
+    float mono = 0.0f;
+    {
+        FontFamilyScope scope(family);
+        mono = UiText().MeasureText(L"iiii", TextRole::Body).w;
+    }
+    Check(mono > body + 4.0f, "custom family changes measure (mono i wider)");
+    Check(Near(UiText().MeasureText(L"iiii", TextRole::Body).w, body, 0.05f),
+          "family scope pops back to role default");
+    {
+        FontFamilyScope scope(L"No Such Family 42");
+        Check(Near(UiText().MeasureText(L"iiii", TextRole::Body).w, body, 0.05f),
+              "unknown family falls back to role default");
+    }
+    {
+        FontFamilyScope scope(L"Microsoft YaHei UI");
+        Check(UiText().MeasureText(L"iiii", TextRole::Body).w > 1.0f, "system family accepted");
+    }
+
+    struct TestLabel : Label {
+        using Label::Label;
+        using Label::Measure;
+    };
+    const Theme theme = MakeTheme();
+    TestLabel plain(L"iiii");
+    TestLabel custom(L"iiii");
+    custom.FontFamily(family);
+    Check(custom.Measure({0.0f, 0.0f}, theme).w > plain.Measure({0.0f, 0.0f}, theme).w + 4.0f,
+          "Label::FontFamily affects measure");
+    Check(custom.FontFamily() == family, "Label::FontFamily reads back");
+
+    struct TestRich : RichLabel {
+        using RichLabel::Measure;
+    };
+    TestRich rich_plain;
+    rich_plain.Add(L"iiii");
+    TestRich rich_custom;
+    rich_custom.Font(L"iiii", family);
+    Check(rich_custom.Measure({300.0f, 0.0f}, theme).h >= rich_plain.Measure({300.0f, 0.0f}, theme).h,
+          "RichLabel::Font run measures");
+}
+
+// Table::CellCharacterFont 运行回归：自定义字体分段绘制 + Reset/加列重建控件池后仍可绘制。
+// 对应宿主（ShowBox 钢筋选配表）序列：布局 → 绘制 → 模型 Reset 换数据 → 加交互列重建 → 再绘制。
+void TestTableCharacterFont() {
+    wchar_t windows[MAX_PATH]{};
+    GetWindowsDirectoryW(windows, MAX_PATH);
+    const std::wstring path = std::wstring(windows) + L"\\Fonts\\consola.ttf";
+    const std::vector<std::byte> bytes = ReadAllBytes(path);
+    if (bytes.empty()) {
+        std::printf("[SKIP] consola.ttf not found\n");
+        return;
+    }
+    const std::wstring family = App::AddFont(std::span<const std::byte>(bytes));
+    Check(!family.empty(), "table character font registered");
+
+    const Theme theme = MakeTheme();
+    TestRoot root;
+    auto& table = root.Add<TestTable>();
+    auto model = std::make_shared<VectorModel<std::wstring>>();
+    model->Reset({L"C8@100", L"C10@150", L"C12@200"});
+    table.Bind(*model);
+    table.AddColumn(L"直径", 120.0f);
+    table.CellCharacterFont(L"C", family);
+    table.RowHeight(30.0f);
+    root.Measure({160.0f, 200.0f}, theme);
+    root.Arrange({0.0f, 0.0f, 160.0f, 200.0f});
+
+    OffscreenRenderer target;
+    if (!target.Init(200, 200)) {
+        Check(false, "table font renderer init");
+        return;
+    }
+    auto band_has_glyph = [&](int x0, int y0, int x1, int y1) {
+        Color bg{};
+        target.ReadPixel(100, 170, bg);   // 表体末行之下的空白区做底色
+        const float base = bg.r + bg.g + bg.b;
+        for (int y = y0; y <= y1; ++y) {
+            for (int x = x0; x <= x1; ++x) {
+                Color c{};
+                target.ReadPixel(x, y, c);
+                if (c.r + c.g + c.b > base + 0.15f) return true;
+            }
+        }
+        return false;
+    };
+
+    // 悬停回调：进表体首行触发 enter，离开触发 leave；逐格提示与锚点跟随单元格。
+    ptrdiff_t hover_row = -2;
+    int hover_col = -2;
+    bool hover_entered = false;
+    int hover_hits = 0;
+    table.OnCellHover([&](ptrdiff_t row, int col, bool entered) {
+        ++hover_hits;
+        hover_row = row;
+        hover_col = col;
+        hover_entered = entered;
+    });
+    table.CellToolTip([](size_t row, int col, std::wstring& out) {
+        out = L"tip " + std::to_wstring(row) + L":" + std::to_wstring(col);
+    });
+    Check(table.ToolTipDelay() < 0.0f, "tooltip delay defaults to theme");
+    table.ToolTipDelay(0.12f);
+    Check(Near(table.ToolTipDelay(), 0.12f), "tooltip delay supports control override");
+    Button delayed;
+    delayed.ToolTipDelay(0.2f);
+    Button moved(std::move(delayed));
+    Check(Near(moved.ToolTipDelay(), 0.2f), "tooltip delay survives control move");
+    bool wheel_consumed = false;
+    table.OnWheelScroll([&](float d) {
+        wheel_consumed = true;
+        return d > 0.0f;
+    });
+
+    for (int round = 0; round < 3; ++round) {
+        if (round == 1) {
+            model->Reset({L"D8@100", L"D10@150"});
+        } else if (round == 2) {
+            const int del = table.AddColumn(L"删除", 60.0f);
+            table.BindButton(del, L"删除", [](size_t) {});
+            root.Measure({200.0f, 200.0f}, theme);
+            root.Arrange({0.0f, 0.0f, 200.0f, 200.0f});
+        }
+        if (round == 0) {
+            table.OnMouseMove({60.0f, 50.0f}, 0);
+            Check(hover_hits == 1 && hover_row == 0 && hover_col == 0 && hover_entered,
+                  "cell hover enter fires");
+            Check(table.ToolTip() == L"tip 0:0", "cell tooltip provider feeds text");
+            const Rect anchor = table.ToolTipAnchor();
+            Check(anchor.y > 31.9f && anchor.y < 32.1f && Near(anchor.h, 30.0f),
+                  "tooltip anchors to hovered cell");
+            table.OnMouseMove({60.0f, 80.0f}, 0);
+            Check(table.ToolTip() == L"tip 1:0", "cell tooltip refreshes after moving rows");
+            const Rect moved_anchor = table.ToolTipAnchor();
+            Check(moved_anchor.y > anchor.y + 29.9f,
+                  "tooltip anchor refreshes after moving rows");
+            table.OnMouseLeave();
+            Check(hover_hits == 3 && hover_row == -1 && !hover_entered,
+                  "cell hover leave fires");
+            Check(table.ToolTip().empty(), "cell tooltip cleared on leave");
+            Check(table.OnWheel(1.0f) && wheel_consumed, "wheel consumed by handler");
+            Check(!table.OnWheel(-1.0f), "wheel falls through when handler declines");
+        }
+        ID2D1DeviceContext2* dc = target.BeginDraw();
+        Painter painter;
+        painter.BeginFrame(dc, &UiText(), 1.0f);
+        painter.FillRect({0.0f, 0.0f, 200.0f, 200.0f}, Color{0.0f, 0.0f, 0.0f, 1.0f});
+        DrawControlTree(painter, theme, &root);
+        painter.EndFrame();
+        Check(target.EndDraw(), "table font round enddraw");
+        // 首行文本带（表头 32 高 + 行高 30）必须出现比底色亮的字形像素。
+        Check(band_has_glyph(8, 34, 118, 92), "table font glyphs drawn");
+    }
+    target.Shutdown();
+}
+
+void TestWindowContentMeasure() {
+    Window window(WindowSpec{.title = L"content-measure", .size = {640.0f, 480.0f}});
+    auto& body = window.Root().Add<Column>();
+    body.Grow().FillCross().Padding(10.0f).Spacing(8.0f);
+    body.Add<Label>(L"Toolbar").MinSize({0.0f, 40.0f}).MaxSize({10000.0f, 40.0f});
+    auto& tables = body.Add<Row>();
+    tables.Grow().FillCross().Spacing(8.0f);
+    auto& left = tables.Add<Column>();
+    left.Grow().FillCross();
+    auto& table = left.Add<Table>();
+    table.FillCross().RowHeight(34.0f);
+    for (int col = 0; col < 14; ++col) table.AddColumn(std::to_wstring(col));
+    auto& side = tables.Add<Table>();
+    side.FillCross().RowHeight(34.0f);
+    side.AddColumn(L"Top");
+    side.AddColumn(L"Bottom");
+    body.Add<Button>(L"Confirm").MinSize({96.0f, 40.0f}).MaxSize({10000.0f, 40.0f});
+    const HWND hwnd = static_cast<HWND>(window.NativeHandle());
+    RECT before{};
+    GetClientRect(hwnd, &before);
+    const float caption = window.TitleBar() ? window.TitleBar()->Height() : 0.0f;
+    for (const int rows : {1, 12, 40}) {
+        const float table_height = 32.0f + rows * 34.0f;
+        table.RowCount(rows).MinSize({0.0f, table_height}).MaxSize({10000.0f, table_height});
+        side.RowCount(rows).MinSize({220.0f, table_height}).MaxSize({220.0f, table_height});
+        const Size desired = window.MeasureContent(1592.0f);
+        Check(Near(desired.h, caption + 20.0f + 80.0f + 16.0f + table_height),
+              "window content measure includes nested grow rows and chrome");
+        RECT after{};
+        GetClientRect(hwnd, &after);
+        Check(EqualRect(&before, &after) && !IsWindowVisible(hwnd),
+              "window content measure does not resize or show window");
+    }
+    // 探测大尺寸不能污染下一次正常布局的测量缓存。
+    const float table_height = 32.0f + 12.0f * 34.0f;
+    table.RowCount(12).MinSize({0.0f, table_height}).MaxSize({10000.0f, table_height});
+    side.RowCount(12).MinSize({220.0f, table_height}).MaxSize({220.0f, table_height});
+    const auto desired = window.MeasureContent(1592.0f);
+    window.Resize(desired);
+    window.LayoutNow();
+    Check(Near(table.AbsoluteBounds().h, table_height) && Near(side.AbsoluteBounds().h, table_height),
+          "window measured size lays out complete table rows");
+    window.Close();
+}
+
+void TestTablePaintStability() {
+    OffscreenRenderer target;
+    if (!target.Init(480, 180)) {
+        Check(false, "table paint stability target init");
+        return;
+    }
+    const Theme theme = MakeTheme();
+    TestTable table;
+    for (const auto* title : {L"First", L"Second", L"Last"}) table.AddColumn(title);
+    table.RowCount(2).RowHeight(30.0f).CellCharacterFont(L"C", L"Consolas");
+    table.CellText([](size_t, size_t, std::wstring& out) { out = L"2C28"; });
+    table.Arrange({10.0f, 10.0f, 360.0f, 100.0f});
+    Check(table.ColumnAt(119.0f) == 0 && table.ColumnAt(120.0f) == 1 &&
+              table.ColumnAt(240.0f) == 2 && table.ColumnAt(359.0f) == 2 &&
+              table.MaxHorizontalScroll() == 0.0f,
+          "table flex columns fill viewport through last column");
+    LumaTextBridge bridge;
+#if defined(LUMEN_HAS_LUMATEXT)
+    (void)UiText().Format(TextRole::Caption);
+    auto* initial_dc = target.BeginDraw();
+    const bool ready = bridge.Init(UiText().Factory(), initial_dc);
+    Check(target.EndDraw() && ready, "table paint stability LumaText init");
+#endif
+    auto render = [&] {
+        auto* dc = target.BeginDraw();
+        dc->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+        Painter painter;
+        painter.BeginFrame(dc, &UiText(), 1.0f);
+        painter.SetLumaText(bridge.Enabled() ? &bridge : nullptr);
+        DrawControlTree(painter, theme, &table);
+        painter.EndFrame();
+        Check(target.EndDraw(), "table paint stability enddraw");
+        std::vector<uint8_t> pixels;
+        Check(target.ReadBack(pixels), "table paint stability readback");
+        return pixels;
+    };
+    const auto original = render();
+    table.Arrange({90.0f, 50.0f, 360.0f, 100.0f});
+    const auto moved = render();
+    bool translated = original.size() == moved.size() && !original.empty();
+    for (int y = 0; translated && y < 100; ++y) {
+        for (int x = 0; x < 360; ++x) {
+            const size_t old_at = (static_cast<size_t>(y + 10) * 480 + x + 10) * 4;
+            const size_t new_at = (static_cast<size_t>(y + 50) * 480 + x + 90) * 4;
+            if (std::memcmp(original.data() + old_at, moved.data() + new_at, 4) != 0) {
+                translated = false;
+                break;
+            }
+        }
+    }
+    Check(translated, "table same-size move refreshes cached drawing position");
+    for (const float x : {40.0f, 160.0f, 359.0f}) {
+        table.OnMouseMove({x, 45.0f}, 0);
+        const auto hovered = render();
+        bool same_ink = hovered.size() == moved.size() && !moved.empty();
+        // 悬停底色影响 AA 边缘，逐单元格比较字形包围盒；禁止位置或末尾数字被裁。
+        for (int col = 0; same_ink && col < 3; ++col) {
+            std::array<int, 4> before{480, 180, -1, -1};
+            std::array<int, 4> after{480, 180, -1, -1};
+            for (int y = 84; y < 110; ++y) {
+                for (int px = 102 + col * 120; px < 198 + col * 120; ++px) {
+                    const size_t at = (static_cast<size_t>(y) * 480 + px) * 4;
+                    for (int image = 0; image < 2; ++image) {
+                        if ((image ? hovered : moved)[at] <= 180) continue;
+                        auto& box = image ? after : before;
+                        box[0] = std::min(box[0], px);
+                        box[1] = std::min(box[1], y);
+                        box[2] = std::max(box[2], px);
+                        box[3] = std::max(box[3], y);
+                    }
+                }
+            }
+            same_ink = before[2] >= before[0] && after[2] >= after[0];
+            for (size_t edge = 0; edge < before.size(); ++edge)
+                same_ink = same_ink && std::abs(before[edge] - after[edge]) <= 1;
+        }
+        Check(same_ink, "table hover preserves mixed-font text positions");
+        bool untouched = hovered.size() == moved.size() && !moved.empty();
+        for (int y = 112; untouched && y < 142; ++y) {
+            const size_t at = (static_cast<size_t>(y) * 480 + 90) * 4;
+            untouched = std::memcmp(moved.data() + at, hovered.data() + at, 360 * 4) == 0;
+        }
+        Check(untouched, "table hover leaves other row pixels unchanged");
+        Check(table.ColumnAt(119.0f) == 0 && table.ColumnAt(120.0f) == 1 &&
+                  table.ColumnAt(240.0f) == 2 && table.ColumnAt(359.0f) == 2,
+              "table hover preserves flex column boundaries");
+    }
+    Check(target.SavePNG(L"lumen_visual_table_stability.png"), "table stability save png");
+    bridge.Shutdown();
+    target.Shutdown();
+}
+
+void TestLumaTextAlignmentCache() {
+#if defined(LUMEN_HAS_LUMATEXT)
+    OffscreenRenderer target;
+    if (!target.Init(144, 48)) {
+        Check(false, "text alignment target init");
+        return;
+    }
+    IDWriteTextFormat* format = UiText().Format(TextRole::Caption);
+    const DWRITE_TEXT_ALIGNMENT alignments[] = {DWRITE_TEXT_ALIGNMENT_LEADING,
+                                               DWRITE_TEXT_ALIGNMENT_CENTER,
+                                               DWRITE_TEXT_ALIGNMENT_TRAILING};
+    // 物理 bounds 完全相同，隔离 Painter 墨迹外扩，确保仅对齐方式不同。
+    for (int reverse = 0; reverse < 2; ++reverse) {
+        LumaTextBridge bridge;
+        auto* dc = target.BeginDraw();
+        const bool ready = format && bridge.Init(UiText().Factory(), dc);
+        Check(target.EndDraw() && ready, "text alignment bridge init");
+        if (!ready) break;
+        for (int warm = 0; warm < 2; ++warm) {
+            int left[3] = {144, 144, 144};
+            for (int step = 0; step < 3; ++step) {
+                const int index = reverse ? 2 - step : step;
+                dc = target.BeginDraw();
+                dc->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+                const bool drawn = bridge.Draw(L"28", format, {12.0f, 4.0f, 132.0f, 36.0f},
+                                                 D2D1::ColorF(D2D1::ColorF::White),
+                                                 D2D1::ColorF(D2D1::ColorF::Black), 1.0f,
+                                                 alignments[index]);
+                const bool ended = target.EndDraw();
+                std::vector<uint8_t> pixels;
+                const bool read = target.ReadBack(pixels);
+                Check(drawn && ended && read, "text alignment draw/readback");
+                if (!drawn || !ended || !read) continue;
+                for (int y = 4; y < 36; ++y) {
+                    for (int x = 12; x < 132; ++x) {
+                        if (pixels[(static_cast<size_t>(y) * 144 + x) * 4] > 64)
+                            left[index] = std::min(left[index], x - 12);
+                    }
+                }
+            }
+            Check(left[0] < 8 && left[1] > 40 && left[1] < 65 && left[2] > 90 &&
+                      left[2] < 120,
+                  reverse ? "text alignment reverse order preserves positions"
+                          : "text alignment forward order preserves positions");
+        }
+        Check(bridge.Stats().surface_cache_hits >= 3, "text alignment warm cache reused");
+        bridge.Shutdown();
+    }
+    target.Shutdown();
+#endif
+}
+
+// 宿主模式循环：模拟 .arx 卸载/重载——Shutdown 后必须能重新注册窗口类、重建文本服务。
+void TestHostCycle() {
+    auto pump = [](HWND hwnd) {
+        MSG msg{};
+        while (PeekMessageW(&msg, hwnd, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    };
+    // 之前的非宿主测试窗口关闭时已投过 WM_QUIT，先清空线程队列。
+    for (MSG drain{}; PeekMessageW(&drain, nullptr, 0, 0, PM_REMOVE);) {}
+    App::HostMode(true);
+    Check(App::HostMode(), "host mode flag");
+    // 硬件设备若在循环中退化到 WARP，说明窗口开关泄漏了 D3D/DComp 设备链。
+    int warp_falls = 0;
+    SetLogSink([&warp_falls](LogLevel level, std::wstring_view text) {
+        if (level == LogLevel::Warn || level == LogLevel::Error)
+            std::printf("[host lifecycle] %.*ls\n", static_cast<int>(text.size()), text.data());
+        if (text.find(L"WARP") != std::wstring_view::npos) ++warp_falls;
+    });
+    for (int i = 0; i < 12; ++i) {
+        try { App::Shutdown(); }
+        catch (const std::exception& ex) {
+            std::printf("[FAIL] host shutdown: %s\n", ex.what());
+            ++g_failures;
+            SetLogSink(nullptr);
+            App::HostMode(false);
+            return;
+        }
+        // 独立测试进程没有其他字体库使用者，关闭后自有引用都应归还。
+        Check(!GetModuleHandleW(L"lumatext.dll") && !GetModuleHandleW(L"lumatextd.dll"),
+              "host shutdown releases LumaText module");
+        Window window(WindowSpec{.title = L"host-cycle", .size = {240.0f, 120.0f}});
+        auto& label = window.Root().Add<Label>(L"host");
+        window.LayoutNow();
+        HWND hwnd = static_cast<HWND>(window.NativeHandle());
+        Check(hwnd != nullptr, "host cycle window created");
+        Check(GetModuleHandleW(L"lumatext.dll") || GetModuleHandleW(L"lumatextd.dll"),
+              "host cycle exercises LumaText load");
+        Check(label.AbsoluteBounds().w > 0.0f, "host cycle window laid out");
+        wchar_t cls[32]{};
+        GetClassNameW(hwnd, cls, 32);
+        Check(std::wcscmp(cls, L"lumen_window") == 0, "host cycle class name");
+        window.Close();
+        pump(hwnd);
+        Check(window.Closed(), "host cycle window closed");
+        Check(window.NativeHandle() == nullptr, "closed window forgets native handle");
+        // 宿主模式下最后一个窗口关闭不得投 WM_QUIT（会把宿主消息泵带走）。
+        MSG quit{};
+        Check(!PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_NOREMOVE),
+              "host mode never posts WM_QUIT");
+    }
+    {
+        // owner：Z 序压在所有者之上。
+        Window owner(WindowSpec{.title = L"host-owner", .size = {240.0f, 120.0f}});
+        Window owned(WindowSpec{.title = L"host-owned", .size = {200.0f, 100.0f},
+                                .owner = owner.NativeHandle()});
+        Check(GetWindow(static_cast<HWND>(owned.NativeHandle()), GW_OWNER) ==
+                  static_cast<HWND>(owner.NativeHandle()),
+              "WindowSpec.owner sets owner");
+        HWND owner_hwnd = static_cast<HWND>(owner.NativeHandle());
+        owner.Close();
+        pump(owner_hwnd);
+        Check(owner.NativeHandle() == nullptr, "destroyed owner forgets native handle");
+        Check(owned.NativeHandle() == nullptr, "owner destruction clears owned handle");
+    }
+    Check(warp_falls == 0, "host cycle keeps hardware D3D device");
+    SetLogSink(nullptr);
+    App::Shutdown();
+    App::HostMode(false);
+    MSG drain{};
+    while (PeekMessageW(&drain, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
 }
 
 void RenderScene(const wchar_t* path) {
@@ -3987,6 +4560,277 @@ void TestInjectedInput() {
     window.DispatchMouseUp(center);
     Check(clicks == 1, "inject click fires");
     Check(window.Focused() == &first, "inject click focuses first button");
+    window.ClearFocus();
+    Check(window.Focused() == nullptr && !first.HasFocus(), "ClearFocus drops logical focus");
+    first.Focus();
+    Check(first.HasFocus(), "Focus restores after ClearFocus");
+    first.Blur();
+    Check(!first.HasFocus() && window.Focused() == nullptr, "Blur clears focused control");
+}
+
+
+void TestTypedEditSafety() {
+    struct Row { int quantity = 10; uint64_t serial = 7; float value = 2.0f; };
+    auto model = std::make_unique<VectorModel<Row>>();
+    model->Push({});
+    TestTable table;
+    table.Bind(*model).Column(L"Quantity", &Row::quantity, 100.0f)
+        .Column(L"Serial", &Row::serial, 100.0f).Column(L"Value", &Row::value, 100.0f);
+    table.CellEditEnabled(true);
+    const Theme theme = MakeTheme();
+    table.Measure({400.0f, 160.0f}, theme);
+    table.Arrange({0.0f, 0.0f, 400.0f, 160.0f});
+    table.BeginEdit(0, 0);
+    Check(table.Editor() && table.Editor()->Visible(), "typed numeric editor opens");
+    if (!table.Editor()) return;
+    for (const auto* invalid : {L"1.5", L"2147483648", L"-2147483649"}) {
+        table.Editor()->Text(invalid);
+        table.Commit();
+        Check(model->At(0).quantity == 10 && table.Editor()->Visible(),
+              "integer edit rejects fraction and out-of-range values without closing");
+    }
+    table.BeginEdit(0, 1);
+    Check(table.Editor()->Text() == L"-2147483649", "invalid draft survives attempted cell switch");
+    table.Editor()->Text(L"2147483647");
+    table.Commit();
+    Check(model->At(0).quantity == 2147483647 && !table.Editor()->Visible(),
+          "integer boundary commits successfully");
+    table.BeginEdit(0, 1);
+    for (const auto* invalid : {L"-1", L"18446744073709551616"}) {
+        table.Editor()->Text(invalid);
+        table.Commit();
+        Check(model->At(0).serial == 7 && table.Editor()->Visible(),
+              "uint64 rejects negative and exclusive upper bound before conversion");
+    }
+    table.Cancel();
+    table.BeginEdit(0, 2);
+    table.Editor()->Text(L"1e39");
+    table.Commit();
+    Check(model->At(0).value == 2.0f && table.Editor()->Visible(), "float member rejects overflow");
+    model.reset();
+    Check(table.RowCount() == 0 && !table.Editor()->Visible(), "model detach cancels active editor");
+    table.RowCount(1);
+    table.BeginEdit(0, 0);
+    table.Editor()->Text(L"42");
+    table.Commit();
+    Check(table.RowCount() == 1, "detached typed callbacks do not access former source");
+}
+
+void TestHiddenAnimation() {
+    struct Probe : Control {
+        int ticks = 0;
+        void Draw(Painter&, const Theme&) override {}
+        void Start() { Animate(); }
+        bool OnAnimate(float) override { ++ticks; return true; }
+    };
+    Window window(L"animation visibility", {240.0f, 120.0f}, Frame::System);
+    auto& parent = window.Root().Add<Column>();
+    auto& probe = parent.Add<Probe>();
+    window.Show();
+    const HWND hwnd = static_cast<HWND>(window.NativeHandle());
+    auto paint = [&] { InvalidateRect(hwnd, nullptr, FALSE); UpdateWindow(hwnd); };
+    probe.Start();
+    paint();
+    Check(probe.ticks > 0, "visible animation advances");
+    parent.Visible(false);
+    const int before = probe.ticks;
+    paint();
+    paint();
+    Check(probe.ticks == before, "hidden ancestor suspends child animation");
+    Check(!GetUpdateRect(hwnd, nullptr, FALSE), "hidden animation does not request another frame");
+    parent.Visible(true);
+    paint();
+    Check(probe.ticks > before, "showing ancestor resumes suspended animation");
+    ShowWindow(hwnd, SW_HIDE);
+    const int hidden_window = probe.ticks;
+    paint();
+    Check(probe.ticks == hidden_window, "hidden window suspends control animation");
+    window.Show();
+    paint();
+    Check(probe.ticks > hidden_window, "showing window resumes animation");
+    DestroyWindow(hwnd);
+    MSG quit{};
+    while (PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
+}
+
+struct PopupWindows {
+    HWND first = nullptr;
+    int visible = 0;
+};
+
+PopupWindows FindPopupWindows() {
+    PopupWindows result;
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND hwnd, LPARAM data) -> BOOL {
+        wchar_t name[64]{};
+        GetClassNameW(hwnd, name, 64);
+        if (std::wcscmp(name, L"lumen_popup") == 0 && IsWindowVisible(hwnd)) {
+            auto& found = *reinterpret_cast<PopupWindows*>(data);
+            if (!found.first) found.first = hwnd;
+            ++found.visible;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&result));
+    return result;
+}
+
+void TestPopupWindow() {
+    Window window(L"popup regression", {480.0f, 320.0f}, Frame::System);
+    auto& trigger = window.Root().Add<Button>(L"Open");
+    int owner_clicks = 0;
+    trigger.OnClick([&] { ++owner_clicks; });
+    window.Show();
+    window.LayoutNow();
+    const HWND owner = static_cast<HWND>(window.NativeHandle());
+    SetWindowPos(owner, nullptr, 120, 120, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    MSG stale{};
+    while (PeekMessageW(&stale, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
+
+    struct PopupContent : StackPanel {
+        float wheel = 0.0f, horizontal = 0.0f;
+        bool OnWheel(float delta) override { wheel = delta; return true; }
+        bool OnHWheel(float delta) override { horizontal = delta; return true; }
+    } content;
+    auto& pick = content.Add<Button>(L"Pick");
+    int picked = 0, closed = 0;
+    pick.OnClick([&] { ++picked; window.ClosePopup(); });
+    auto run = [&](const Control* anchor, auto action) {
+        const UINT_PTR timer = SetTimer(owner, 0, 3000, [](HWND timer_owner, UINT, UINT_PTR id, DWORD) {
+            Check(false, "popup test watchdog: session must terminate");
+            const auto popup = FindPopupWindows();
+            if (popup.first) PostMessageW(popup.first, WM_KEYDOWN, VK_ESCAPE, 0);
+            KillTimer(timer_owner, id);
+        });
+        window.Post(std::move(action));
+        window.ShowPopup(content, anchor, 240.0f, [&] { ++closed; });
+        KillTimer(owner, timer);
+        Check(!window.PopupActive() && FindPopupWindows().visible == 0, "popup session closes exactly one native window");
+        Check(!Renderer::FlyoutOpen(), "popup balances renderer flyout depth");
+        Check(content.WindowOf() == nullptr && pick.WindowOf() == nullptr, "popup detaches borrowed content tree");
+    };
+
+    run(&trigger, [&] {
+        const auto popup = FindPopupWindows();
+        Check(popup.visible == 1, "popup opens one native window");
+        if (!popup.first) { window.ClosePopup(); return; }
+        RECT before{}, after{}, main{};
+        GetWindowRect(popup.first, &before);
+        GetWindowRect(owner, &main);
+        SetWindowPos(owner, nullptr, main.left + 43, main.top + 31, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        GetWindowRect(popup.first, &after);
+        Check(after.left - before.left == 43 && after.top - before.top == 31,
+              "popup follows owner movement synchronously");
+        const float scale = static_cast<float>(GetDpiForWindow(popup.first)) / 96.0f;
+        const Rect r = pick.AbsoluteBounds();
+        const LPARAM point = MAKELPARAM(static_cast<int>((r.x + r.w * 0.5f) * scale),
+                                        static_cast<int>((r.y + r.h * 0.5f) * scale));
+        POINT screen{static_cast<short>(LOWORD(point)), static_cast<short>(HIWORD(point))};
+        ClientToScreen(popup.first, &screen);
+        const LPARAM wheel_point = MAKELPARAM(screen.x, screen.y);
+        SendMessageW(popup.first, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA), wheel_point);
+        Check(content.wheel == 1.0f, "popup normalizes a wheel notch to one unit");
+        SendMessageW(popup.first, WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA / 4), wheel_point);
+        Check(content.wheel == 0.25f, "popup preserves fractional wheel input");
+        SendMessageW(popup.first, WM_MOUSEHWHEEL, MAKEWPARAM(0, WHEEL_DELTA), wheel_point);
+        Check(content.horizontal == 1.0f, "popup routes horizontal wheel separately");
+        SendMessageW(popup.first, WM_MOUSEMOVE, 0, point);
+        SendMessageW(popup.first, WM_LBUTTONDOWN, MK_LBUTTON, point);
+        SendMessageW(popup.first, WM_LBUTTONUP, 0, point);
+        Check(picked == 1, "popup client coordinates hit the intended button");
+        Check(!IsWindowVisible(popup.first), "ClosePopup hides immediately before the callback unwinds");
+        window.ClosePopup();
+    });
+    Check(closed == 1, "popup closed callback fires once");
+
+    run(&trigger, [&] {
+        StackPanel second;
+        second.Add<Label>(L"Second");
+        int rejected_closed = 0;
+        const HWND original = FindPopupWindows().first;
+        window.ShowPopup(second, &trigger, 220.0f, [&] { ++rejected_closed; });
+        window.ShowPopup(content, &trigger, 240.0f);
+        Check(FindPopupWindows().visible == 1 && FindPopupWindows().first == original,
+              "reentrant ShowPopup cannot stack native windows");
+        Check(rejected_closed == 0 && second.WindowOf() == nullptr,
+              "rejected popup does not replace callbacks or borrow content");
+        window.ClosePopup();
+    });
+    Check(closed == 2, "reentrant popup preserves the original closed callback");
+
+    auto click_owner = [&] {
+        const Rect r = trigger.AbsoluteBounds();
+        const float scale = static_cast<float>(GetDpiForWindow(owner)) / 96.0f;
+        const LPARAM point = MAKELPARAM(static_cast<int>((r.x + r.w * 0.5f) * scale),
+                                        static_cast<int>((r.y + r.h * 0.5f) * scale));
+        SendMessageW(owner, WM_LBUTTONDOWN, MK_LBUTTON, point);
+        SendMessageW(owner, WM_LBUTTONUP, 0, point);
+    };
+    run(&trigger, [&] { click_owner(); });
+    Check(owner_clicks == 0, "outside click dismisses without activating owner content");
+    click_owner();
+    Check(owner_clicks == 1, "owner input works normally after popup closes");
+
+    run(&trigger, [&] { PostMessageW(owner, WM_KEYDOWN, VK_ESCAPE, 0); });
+    Check(closed == 4, "Escape addressed to owner dismisses popup");
+
+    run(&trigger, [&] {
+        const HWND popup = FindPopupWindows().first;
+        const Rect r = pick.AbsoluteBounds();
+        const float scale = static_cast<float>(GetDpiForWindow(popup)) / 96.0f;
+        const LPARAM point = MAKELPARAM(static_cast<int>((r.x + 4.0f) * scale),
+                                        static_cast<int>((r.y + 4.0f) * scale));
+        SendMessageW(popup, WM_LBUTTONDOWN, MK_LBUTTON, point);
+        SetCapture(owner);
+    });
+    Check(GetCapture() == owner, "popup cleanup does not release another window's capture");
+    ReleaseCapture();
+    Check(picked == 1, "capture loss cancels the pressed button without invoking it");
+
+    run(&trigger, [&] { ShowWindow(owner, SW_HIDE); });
+    window.Show();
+    window.LayoutNow();
+    run(&trigger, [&] { SendMessageW(owner, WM_ACTIVATEAPP, FALSE, 0); });
+    run(&trigger, [&] { PostQuitMessage(42); });
+    MSG quit{};
+    Check(PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE) && quit.wParam == 42,
+          "popup preserves WM_QUIT and its exit code");
+
+    run(&trigger, [&] { window.Root().Clear(); });
+    Check(closed == 9, "anchor deletion closes popup and calls closed once");
+
+    window.Post([&] { DestroyWindow(owner); });
+    window.ShowPopup(content, nullptr, 240.0f, [&] { ++closed; });
+    Check(window.Closed() && !window.PopupActive(), "owner destruction ends popup session");
+    Check(content.WindowOf() == nullptr && !Renderer::FlyoutOpen(),
+          "owner destruction detaches popup content and balances renderer state");
+    Check(closed == 9, "owner destruction suppresses callbacks capturing the dead owner");
+    while (PeekMessageW(&stale, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
+}
+
+void TestHwndFocus() {
+    Window window(L"hwnd-focus", {320.0f, 96.0f});
+    auto& first = window.Root().Add<Button>(L"A");
+    window.LayoutNow();
+    first.Focus();
+    Check(first.HasFocus(), "hwnd-focus starts focused");
+    HWND hwnd = static_cast<HWND>(window.NativeHandle());
+    int kill = 0;
+    int set = 0;
+    auto hook = window.BindNativeMessage([&](std::uint32_t msg, std::uintptr_t, std::intptr_t) {
+        if (msg == WM_KILLFOCUS) ++kill;
+        if (msg == WM_SETFOCUS) ++set;
+    });
+    SendMessageW(hwnd, WM_KILLFOCUS, 0, 0);
+    Check(kill == 1, "native hook sees WM_KILLFOCUS");
+    Check(!first.HasFocus() && window.Focused() == nullptr, "WM_KILLFOCUS clears HasFocus");
+    SendMessageW(hwnd, WM_SETFOCUS, 0, 0);
+    Check(set == 1, "native hook sees WM_SETFOCUS");
+    Check(window.Focused() == &first && first.HasFocus(), "WM_SETFOCUS restores last focus");
+    window.ClearFocus();
+    SendMessageW(hwnd, WM_SETFOCUS, 0, 0);
+    Check(window.Focused() == nullptr, "explicit ClearFocus is not restored on SETFOCUS");
+    hook.Disconnect();
+    window.Close();
 }
 
 void TestPointer() {
@@ -4099,6 +4943,16 @@ void TestUia() {
     auto& box = col.Add<CheckBox>(L"UiaCheck");
     auto& slider = col.Add<Slider>();
     slider.Range(0.0f, 100.0f).Value(25.0f);
+    std::wstring grid_value = L"12";
+    auto& grid = col.Add<Table>().AccessibleName(L"UiaGrid").MinSize({200.0f, 100.0f});
+    grid.AddColumn(L"Hidden", 50.0f);
+    grid.AddColumn(L"Amount", 100.0f);
+    grid.ColumnVisible(0, false).RowCount(2).CellEditEnabled();
+    grid.CellText([&](size_t row, size_t, std::wstring& out) { out = row == 0 ? grid_value : L"24"; });
+    grid.ValidateCell([](const CellEdit& edit) { return edit.after == L"bad" ? L"Invalid" : L""; });
+    grid.OnCellEdited([&](size_t row, int column, std::wstring value) {
+        if (row == 0 && column == 1) grid_value = std::move(value);
+    });
     window.Show();
     window.LayoutNow();
 
@@ -4192,8 +5046,70 @@ void TestUia() {
         slider_el->Release();
     }
 
-    root->Release();
+    found = find_named(L"UiaGrid");
+    Check(found != nullptr, "uia finds grid");
+    IUIAutomationValuePattern* retained_cell = nullptr;
+    if (found) {
+        IUIAutomationGridPattern* pattern = nullptr;
+        found->GetCurrentPatternAs(UIA_GridPatternId, IID_IUIAutomationGridPattern,
+            reinterpret_cast<void**>(&pattern));
+        Check(pattern != nullptr, "uia grid pattern");
+        if (pattern) {
+            int rows = 0, columns = 0;
+            pattern->get_CurrentRowCount(&rows); pattern->get_CurrentColumnCount(&columns);
+            Check(rows == 2 && columns == 1, "uia grid counts omit hidden columns");
+            IUIAutomationElement* cell = nullptr;
+            Check(SUCCEEDED(pattern->GetItem(0, 0, &cell)) && cell, "uia obtains virtual cell");
+            if (cell) {
+                IUIAutomationGridItemPattern* item = nullptr;
+                cell->GetCurrentPatternAs(UIA_GridItemPatternId, IID_IUIAutomationGridItemPattern,
+                    reinterpret_cast<void**>(&item));
+                Check(item != nullptr, "uia grid item coordinates");
+                if (item) {
+                    int row = -1, column = -1, span = 0;
+                    item->get_CurrentRow(&row); item->get_CurrentColumn(&column); item->get_CurrentColumnSpan(&span);
+                    Check(row == 0 && column == 0 && span == 1, "uia visible cell coordinates");
+                    item->Release();
+                }
+                cell->GetCurrentPatternAs(UIA_ValuePatternId, IID_IUIAutomationValuePattern,
+                    reinterpret_cast<void**>(&retained_cell));
+                Check(retained_cell != nullptr, "uia cell value pattern");
+                if (retained_cell) {
+                    BSTR initial = nullptr;
+                    retained_cell->get_CurrentValue(&initial);
+                    Check(initial && std::wstring_view(initial) == L"12", "uia cell reads current value");
+                    SysFreeString(initial);
+                    BSTR valid = SysAllocString(L"36"), invalid = SysAllocString(L"bad");
+                    Check(SUCCEEDED(retained_cell->SetValue(valid)) && grid_value == L"36", "uia cell commits mapped data column");
+                    Check(FAILED(retained_cell->SetValue(invalid)) && grid_value == L"36", "uia cell rejects invalid edit");
+                    SysFreeString(valid); SysFreeString(invalid);
+                }
+                cell->Release();
+            }
+            pattern->Release();
+        }
+        found->Release();
+    }
+    Check(!App::CanShutdown(), "live UIA providers block shutdown");
+    HWND closing_hwnd = static_cast<HWND>(window.NativeHandle());
     window.Close();
+    MSG close_msg{};
+    while (PeekMessageW(&close_msg, closing_hwnd, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&close_msg);
+        DispatchMessageW(&close_msg);
+    }
+    Check(window.Closed(), "UIA window closed with client retained");
+    if (retained_cell) {
+        BSTR value = SysAllocString(L"48");
+        Check(FAILED(retained_cell->SetValue(value)) && grid_value == L"36", "closed grid cell provider refuses mutation");
+        SysFreeString(value);
+        retained_cell->Release();
+    }
+    BSTR stale_name = nullptr;
+    hr = root->get_CurrentName(&stale_name);
+    SysFreeString(stale_name);
+    Check(FAILED(hr), "closed UIA provider is unavailable");
+    root->Release();
     uia->Release();
 }
 
@@ -4252,10 +5168,20 @@ int main() {
     TestChoreography();
     TestDefaultChrome();
     TestInjectedInput();
+    TestHwndFocus();
+    TestPopupWindow();
+    TestTypedEditSafety();
+    TestHiddenAnimation();
     TestPointer();
     TestDirtyRects();
     TestUia();
     TestDebugChecks();
+    TestCustomFonts();
+    TestTableCharacterFont();
+    TestLumaTextAlignmentCache();
+    TestTablePaintStability();
+    TestWindowContentMeasure();
+    TestHostCycle();
     RenderScene(L"lumen_visual_dark.png");
     RenderListScene(L"lumen_visual_lists.png");
     RenderExtrasScene(L"lumen_visual_extras.png");

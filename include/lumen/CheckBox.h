@@ -19,6 +19,8 @@ public:
 
     const std::wstring& Text() const noexcept { return text_; }
     CheckBox& Text(std::wstring_view value) { text_ = value; RelayoutParent(); return *this; }
+    TextRole Role() const noexcept { return role_; }
+    CheckBox& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
 
     bool Checked() const noexcept { return state_ == CheckState::Checked; }
     CheckBox& Checked(bool value);  // programmatic, no OnToggled
@@ -76,6 +78,7 @@ protected:
     void Cycle();
 
     std::wstring text_;
+    TextRole role_ = TextRole::BodyStrong;
     CheckState state_ = CheckState::Unchecked;
     bool three_state_ = false;
     Signal<bool> toggled_;

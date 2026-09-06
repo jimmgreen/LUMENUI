@@ -34,6 +34,13 @@ RichLabel& RichLabel::Link(std::wstring_view text, std::function<void()> on_clic
     return *this;
 }
 
+RichLabel& RichLabel::Font(std::wstring_view text, std::wstring_view family) {
+    runs_.push_back(Run{std::wstring(text), RunKind::Body, {}, std::wstring(family)});
+    wrap_width_ = -1.0f;
+    RelayoutParent();
+    return *this;
+}
+
 RichLabel& RichLabel::Clear() {
     runs_.clear();
     segs_.clear();
@@ -53,6 +60,7 @@ void RichLabel::Rebuild(float width) {
     for (size_t ri = 0; ri < runs_.size(); ++ri) {
         const Run& run = runs_[ri];
         const TextRole role = run.kind == RunKind::Strong ? TextRole::BodyStrong : TextRole::Body;
+        FontFamilyScope family(run.family);
         size_t i = 0;
         while (i < run.text.size()) {
             if (run.text[i] == L'\n') {
@@ -109,6 +117,7 @@ void RichLabel::Draw(Painter& painter, const Theme& theme) {
             color = hover_run_ == static_cast<int>(seg.run) ? theme.text : theme.text_secondary;
         }
         const Rect slot{absolute_.x + seg.x, absolute_.y + seg.y, seg.w, std::max(seg.h, 16.0f)};
+        FontFamilyScope family(run.family);
         painter.DrawText(std::wstring_view(run.text).substr(seg.begin, seg.length), slot, role,
                          color);
         if (run.kind == RunKind::Link) {

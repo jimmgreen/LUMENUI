@@ -120,6 +120,7 @@ void BuildStatus(lumen::StackPanel& column, lumen::Window& window) {
         .SizeClass(ButtonSize::Small)
         .OnClick([&window] {
             ToastData data;
+            data.title = L"构建警告";
             data.text = L"构建被中止，需要处理";
             data.duration = 0.0f;
             data.kind = ToastKind::Warning;

@@ -15,8 +15,11 @@ void DrawControlTree(Painter& painter, const Theme& theme, Control* root, const 
                                                     : root->absolute_.Inset(-kDirtyPadDip, -kDirtyPadDip);
         if (drawn.Intersect(clip).IsEmpty()) return;
     }
-    root->Prepare(painter);
-    root->Draw(painter, root->EffectiveTheme(theme));
+    const Theme effective = root->EffectiveTheme(theme);
+    WeakRef<Control> live(root);
+    root->Prepare(painter, effective);
+    if (!live) return;
+    root->Draw(painter, effective);
     if (auto* panel = root->AsPanel()) {
         const bool clip_children = panel->ClipChildren();
         if (clip_children) painter.PushClip(panel->ChildrenClipBounds());

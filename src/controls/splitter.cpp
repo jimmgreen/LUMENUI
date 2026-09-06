@@ -74,7 +74,8 @@ bool Splitter::OnAnimate(float dt_seconds) {
         more = EaseTo(breathe_, dragging_ ? 1.0f : 0.0f, dt_seconds, 10.0f, 0.01f) || more;
     }
     if (more) Invalidate();
-    return more || Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    return more || base;
 }
 
 void Splitter::Draw(Painter& painter, const Theme& theme) {

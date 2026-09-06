@@ -10,10 +10,13 @@
 #include "lumen/Painter.h"
 #include "com_ptr.h"
 #include "renderer.h"
+#include "dispatch_state.h"
 #include "text_service.h"
 #include <windows.h>
 #include <d2d1_3.h>
 #include <shellapi.h>
+#include <cstdint>
+#include <atomic>
 #include <deque>
 #include <functional>
 #include <iosfwd>
@@ -24,6 +27,9 @@
 #include <vector>
 
 namespace lumen {
+
+// UI 投递端口的唤醒消息（仅内部头可见）。
+constexpr UINT kWmPost = WM_APP + 0x20;
 
 inline constexpr UINT kWmTray = WM_APP + 0x21;
 
@@ -39,7 +45,8 @@ class MenuBar;
 
 class WindowImpl {
 public:
-    WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame);
+    WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame,
+               HWND owner = nullptr, bool title_bar = true, HWND match_dpi_hwnd = nullptr);
     ~WindowImpl();
 
     // 控件基类经 Window API 转发的内部通道。
@@ -91,13 +98,17 @@ public:
     bool Closed() const noexcept { return closed_; }
     void Title(std::wstring_view text);
     void Resize(Size client_size);
+    Size MeasureContent(float client_width);
     void MinSize(Size min_size);
     void Invalidate();
     void InvalidateRegion(const Rect& dip);
     void RequestAnimation(Control* control = nullptr);
-    void RequestRelayout();
+    void RequestRelayout(const wchar_t* reason = L"control property or tree change");
     void SetFocusControl(Control* control);
+    void ClearFocus();
+    void OnHwndFocus(bool gained);
     void GlowIntensity(float intensity);
+    void PerfHud(bool on);
     void SetBackdrop(Backdrop backdrop);
     void ShowDialog(Dialog& dialog);
     void ShowDialog(std::unique_ptr<Dialog> dialog);
@@ -109,12 +120,19 @@ public:
     void SetIconMemory(std::span<const std::byte> ico);
     void LoadFirstExeIcon();
     void DumpTree(std::wostream& out) const;
-    void RunWorker(std::function<void()> work, std::function<void()> then);
+    TaskHandle RunWorker(std::function<void(const TaskHandle&)> work, std::function<void()> then,
+                         std::wstring_view busy);
     void CloseDialog();
     void FinishDialog();
     void ForgetControl(const Control* control);
     void OnToolTipChanged(Control* host);
     void ShowFlyout(Flyout& flyout, const Control* anchor);
+    // 通用弹出窗（R06）：任意控件子树越过客户区，模态泵（菜单同通道）。
+    // 阻塞至收起；点击外部/Esc/内容回调里 ClosePopup() 收起，closed 在收起后调用。
+    void ShowPopup(Control& content, const Control* anchor, float width,
+                   std::function<void()> closed = {});
+    void ClosePopup();
+    bool PopupActive() const noexcept { return popup_open_; }
     void ShowTeachingTip(TeachingTip& tip, const Control* anchor);
     void CloseFlyout(bool invoke_closed = true);
     bool FlyoutActive() const noexcept { return active_flyout_ != nullptr; }
@@ -125,7 +143,7 @@ public:
     void RequestCloseDrawer();
     void FinishDrawer();
     bool DrawerActive() const noexcept { return active_drawer_ != nullptr; }
-    void Post(std::function<void()> fn);
+    PostResult Post(std::function<void()> fn);   // 内部调用可忽略返回值（= 旧语义）
     bool IsUiThread() const noexcept;
     Window::TimerId SetInterval(float seconds, std::function<void()> fn, bool once);
     void ClearTimer(Window::TimerId id);
@@ -134,6 +152,10 @@ public:
     void TrayIcon(void* hicon, std::wstring_view tooltip);
     void OnTrayClick(std::function<void()> handler);
     Connection BindTrayClick(std::function<void()> handler);
+    void OnNativeMessage(
+        std::function<void(uint32_t, std::uintptr_t, std::intptr_t)> fn);
+    Connection BindNativeMessage(
+        std::function<void(uint32_t, std::uintptr_t, std::intptr_t)> fn);
     void MinimizeToTray(bool on);
     void SetTrayMenu(Menu menu);
     // Dialog/Flyout 析构时注销，避免窗口仍持有已销毁的 overlay 指针。
@@ -144,6 +166,10 @@ public:
     void ShowToast(ToastData data);
     void SetToastMotion(ToastMotion motion);
     ToastMotion GetToastMotion() const noexcept { return toast_motion_; }
+    void SetToastPlacement(ToastPlacement placement);
+    ToastPlacement GetToastPlacement() const noexcept { return toast_placement_; }
+    void SetToastMargin(float margin) noexcept;
+    float GetToastMargin() const noexcept { return toast_margin_; }
     void DrawToasts(Painter& painter, const Theme& theme, const Rect& client);
     void DrawTooltip(Painter& painter, const Theme& theme, const Rect& client);
     void* NativeHandle() const noexcept { return hwnd_; }
@@ -202,6 +228,7 @@ private:
     bool OverlayWantsAcrylic() const noexcept;
     float AcrylicAmount() const noexcept;
     float AcrylicDim() const noexcept;
+    float AcrylicSigma() const noexcept;
     void CollectFocusable(Control* tree, std::vector<Control*>& order);
     static Point ToLocal(const Control* control, Point absolute);
     Control* HitTest(Point p);
@@ -222,6 +249,7 @@ private:
     bool FireMenuShortcuts(const std::vector<MenuItem>& items, uint32_t vk);
     void ScanMenuBarShortcuts(Control* tree, uint32_t vk, bool& hit);
     void DrainPosted();
+    void EmitTaskFailed(const std::wstring& what);
     void FireTimer(UINT_PTR id);
     void ApplyPlacement();
     void SavePlacement();
@@ -230,6 +258,7 @@ private:
     void RestoreFromTray();
     void SyncImeCaret();
     bool ImeClientCaret(POINT* caret_px, int* line_h_px, RECT* doc_px) const;
+    Control* ImeTarget() const;
     bool OnImeRequest(WPARAM wparam, LPARAM lparam, LRESULT* result);
     void HandleImeComposition(LPARAM lparam);
     void TrackMouse();
@@ -257,6 +286,7 @@ private:
     Painter painter_;
     Theme theme_;
     float glow_intensity_ = 0.5f;
+    MotionMode motion_mode_ = MotionMode::System;
     Backdrop backdrop_ = Backdrop::None;
     ComPtr<ID2D1Bitmap1> backdrop_cache_;
     bool backdrop_cache_dirty_ = true;
@@ -265,6 +295,7 @@ private:
     enum class CaptionHover { None, Min, Max, Close };
     CaptionHover caption_hover_ = CaptionHover::None;
     bool tracking_nc_mouse_ = false;
+    bool perf_hud_on_ = false;
     wchar_t perf_hud_[96]{};
     float fps_ema_ = 0.0f;
     LARGE_INTEGER qpc_freq_{};
@@ -275,6 +306,7 @@ private:
     Control* hovered_ = nullptr;
     Control* captured_ = nullptr;
     Control* focused_ = nullptr;
+    Control* focus_restore_ = nullptr;   // WM_KILLFOCUS 时记下，WM_SETFOCUS 恢复；ClearFocus 清掉
     bool keyboard_focus_ = false;
     bool touch_input_ = false;
     float hit_slop_dip_ = 0.0f;
@@ -297,13 +329,16 @@ private:
     std::function<void()> flyout_closed_;
     std::unique_ptr<BusyOverlay> owned_busy_;
     BusyOverlay* active_busy_ = nullptr;
+    std::shared_ptr<TaskStatusBox> busy_task_;
     Control* busy_focus_return_ = nullptr;
     Drawer* active_drawer_ = nullptr;
     Control* drawer_focus_return_ = nullptr;
 
     DWORD ui_thread_id_ = 0;
-    std::mutex post_mutex_;
-    std::deque<std::function<void()>> post_queue_;
+    bool shown_state_ = false, activated_state_ = false;
+    // UI 投递端口：独立于 WindowImpl 生命期被后台线程持有。关闭先关接收门，
+    // 再清队列；唤醒失败即回滚，保证「返回拒绝后绝不执行」。
+    std::shared_ptr<DispatchState> port_ = std::make_shared<DispatchState>();
     struct TimerSlot {
         UINT_PTR id = 0;
         std::function<void()> fn;
@@ -321,9 +356,11 @@ private:
     bool minimize_to_tray_ = false;
     NOTIFYICONDATAW tray_{};
     Signal<> tray_click_;
+    Signal<uint32_t, std::uintptr_t, std::intptr_t> native_message_;
     Menu tray_menu_;
     bool has_tray_menu_ = false;
     struct Toast {
+        std::wstring title;
         std::wstring text;
         std::wstring glyph;
         std::wstring action;
@@ -334,6 +371,7 @@ private:
         double pause_seconds = 0.0;
         double exit_start = 0.0;
         float y = 0.0f;
+        float scale = 1.0f;   // 折叠层缩放（动画值；前沿恒 1）
         bool placed = false;
         bool exiting = false;
         bool hovering = false;
@@ -345,11 +383,24 @@ private:
     };
     std::vector<Toast> toasts_;
     double toast_tick_ = 0.0;
+    // 牌堆静止后帧循环停止（WM_PAINT 优先级高于 WM_TIMER，常驻帧循环会饿死业务定时器），
+    // 用一次性 WM_TIMER 在下一次出生/到期时刻唤醒做一次重绘检查。
+    static constexpr UINT_PTR kToastWakeTimerId = 0x51A5;
+    bool toast_wake_armed_ = false;
+    double toast_wake_at_ = 0.0;
     ToastMotion toast_motion_ = ToastMotion::Fade;
+    ToastPlacement toast_placement_ = ToastPlacement::BottomRight;
+    float toast_margin_ = 20.0f;
+    float toast_expand_ = 0.0f;      // 0 牌堆折叠 / 1 hover 全展开（动画值）
+    bool toast_stack_hot_ = false;   // 指针在牌堆热区内（含卡片间缝隙）
+    Point toast_cursor_{};           // 最近指针位置：新 toast 滑进静止指针下方时当帧重估
+    bool toast_cursor_valid_ = false;
+    Rect toast_hot_region_{};        // DrawToasts 每帧写入：全体卡片包围盒外扩 4 DIP
     ptrdiff_t toast_press_ = -1;
     int toast_press_part_ = 0;   // 0 card / 1 action / 2 close
     double clock_seconds() const;
     bool TickToasts(double now_seconds);
+    void UpdateToastWake(double now_seconds);
     float ToastHeight(const Toast& toast) const noexcept;
     const wchar_t* ToastGlyph(const Toast& toast) const noexcept;
     bool ToastPersist(const Toast& toast) const noexcept;
@@ -388,6 +439,8 @@ private:
     std::function<bool()> closing_;
 
     bool layout_dirty_ = true;
+    const wchar_t* layout_reason_ = L"initial layout";
+    uint64_t layout_requests_ = 0;
     bool dirty_full_ = true;
     int dirty_count_ = 0;
     Rect dirty_rects_[kMaxDirtyRects]{};
@@ -402,7 +455,6 @@ private:
     LARGE_INTEGER last_tick_{};
     std::vector<Control*> anim_targets_;
     std::unique_ptr<Dialog> owned_dialog_;
-    std::shared_ptr<void> keep_alive_ = std::make_shared<char>();
     struct FrameCb {
         uint64_t id = 0;
         std::function<bool(float)> fn;
@@ -411,10 +463,14 @@ private:
     uint64_t next_frame_id_ = 1;
     struct OleDropTarget;
     OleDropTarget* ole_drop_ = nullptr;
+    bool ole_initialized_ = false;
     Control* drop_armed_ = nullptr;
     void* uia_state_ = nullptr;
+    bool uia_shutting_down_ = false;
+    bool popup_open_ = false;
 
     friend class Window;   // Window 的成员函数需要读写内部状态
+    friend class PopupWindow;
     friend struct OleDropTarget;
     friend struct UiaNode;
 };

@@ -1,6 +1,7 @@
 // input_router.cpp — WindowImpl 命中测试、捕获、悬停、聚光、焦点遍历。
 #include "window_impl.h"
 #include "hotkey.h"
+#include "popup_window.h"
 #include "lumen/BusyOverlay.h"
 #include "lumen/Dialog.h"
 #include "lumen/Drawer.h"
@@ -10,28 +11,74 @@
 #include "lumen/TitleBar.h"
 #include "lumen/ToolTip.h"
 #include <algorithm>
+#include <cstdint>
+#include <functional>
 #include <vector>
 #include <windows.h>
 
 namespace lumen {
 
 void WindowImpl::SetFocusControl(Control* control) {
+    if (PopupWindow::TrySetFocus(this, control)) return;
     if (focused_ == control) return;
-    if (focused_) {
-        focused_->focused_ = false;
-        focused_->OnFocusChanged(false);
-        focused_->Animate();
+    auto port = port_;
+    WeakRef<Control> next(control), previous(focused_);
+    focused_ = nullptr;
+    if (previous) {
+        previous->focused_ = false;
+        previous->OnFocusChanged(false);
+        if (previous) previous->NotifyFocusEvent(false);
+        if (previous) previous->Animate();
     }
-    focused_ = control;
+    if (!port->target.load(std::memory_order_acquire)) return;
+    focused_ = next.Get();
     if (focused_) {
         focused_->focused_ = true;
         focused_->OnFocusChanged(true);
-        focused_->Animate();
+        if (!port->target.load(std::memory_order_acquire)) return;
+        if (next) next->NotifyFocusEvent(true);
+        if (!port->target.load(std::memory_order_acquire)) return;
+        if (next) next->Animate();
         EnsureFocusVisible();
     }
     SyncImeCaret();
     Invalidate();
     UiaOnFocus();
+}
+
+void WindowImpl::ClearFocus() {
+    focus_restore_ = nullptr;
+    keyboard_focus_ = false;
+    SetFocusControl(nullptr);
+}
+
+void WindowImpl::OnHwndFocus(bool gained) {
+    if (gained) {
+        if (!focused_ && focus_restore_) {
+            Control* restore = focus_restore_;
+            focus_restore_ = nullptr;
+            if (restore->window_ == api_ && restore->visible_ && restore->enabled_) {
+                SetFocusControl(restore);
+            }
+        }
+        SyncImeCaret();
+        return;
+    }
+    keyboard_focus_ = false;
+    if (focused_) {
+        focus_restore_ = focused_;
+        SetFocusControl(nullptr);
+    }
+}
+
+void WindowImpl::OnNativeMessage(
+    std::function<void(uint32_t, std::uintptr_t, std::intptr_t)> fn) {
+    native_message_.Subscribe(std::move(fn));
+}
+
+Connection WindowImpl::BindNativeMessage(
+    std::function<void(uint32_t, std::uintptr_t, std::intptr_t)> fn) {
+    return native_message_.Connect(std::move(fn));
 }
 
 Control* WindowImpl::HitTree(Control* control, Point p) const {
@@ -299,6 +346,18 @@ void WindowImpl::OnMouseButton(int px, int py, uint32_t buttons, bool down, uint
 
 bool WindowImpl::OnKeyDown(uint32_t vk) {
     keyboard_focus_ = true;
+    if (focused_ && focused_->ImeComposing()) {
+        if (vk == VK_ESCAPE || vk == VK_RETURN || vk == VK_TAB) {
+            if (HIMC context = ImmGetContext(hwnd_)) {
+                ImmNotifyIME(context, NI_COMPOSITIONSTR, vk == VK_ESCAPE ? CPS_CANCEL : CPS_COMPLETE, 0);
+                ImmReleaseContext(hwnd_, context);
+            }
+            if (vk == VK_ESCAPE && focused_) focused_->OnImeEnd();
+            return true;
+        }
+        return false;
+    }
+    if (focused_ && focused_->OnKey(vk)) return true;
     if (vk == VK_ESCAPE && active_busy_) {
         active_busy_->OnKey(vk);
         return true;
@@ -319,7 +378,6 @@ bool WindowImpl::OnKeyDown(uint32_t vk) {
         active_dialog_->OnKey(vk);
         return true;
     }
-    if (focused_ && focused_->OnKey(vk)) return true;
     if (TryShortcuts(vk)) return true;
     if (vk == VK_TAB) {
         const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;

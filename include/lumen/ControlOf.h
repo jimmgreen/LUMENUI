@@ -29,6 +29,13 @@ public:
     const std::wstring& AccessibleName() const noexcept { return Control::AccessibleName(); }
     bool Spotlight() const noexcept { return Control::Spotlight(); }
 
+    // 焦点变化（获得/失去都发，参数为当前状态）。观察用：宿主据此管理键盘归属，
+    // 不再为收事件派生控件。鼠标、Tab、程序 Focus()/Blur() 都经此一点。
+    D& OnFocused(std::function<void(bool focused)> fn) {
+        Control::BindFocused(std::move(fn)).Release();
+        return Self();
+    }
+
     D& Visible(bool v) {
         Control::Visible(v);
         return Self();
@@ -46,6 +53,11 @@ public:
         return Self();
     }
     D& ToolTip(std::string_view utf8) { return ToolTip(U8(utf8)); }
+    float ToolTipDelay() const noexcept { return Control::ToolTipDelay(); }
+    D& ToolTipDelay(float seconds) {
+        Control::ToolTipDelay(seconds);
+        return Self();
+    }
     D& Grow(float weight = 1.0f) {
         Control::Grow(weight);
         return Self();
@@ -109,6 +121,10 @@ public:
     }
     D& Focus() {
         Control::Focus();
+        return Self();
+    }
+    D& Blur() {
+        Control::Blur();
         return Self();
     }
 

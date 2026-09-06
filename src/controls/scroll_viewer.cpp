@@ -329,6 +329,7 @@ void ScrollViewer::PanFling(float vx, float vy) {
 
 bool ScrollViewer::OnWheel(float delta) {
     if (!vertical_ || MaxScrollY() <= 0.0f) return false;
+    if ((delta > 0.0f && target_y_ <= 0.0f) || (delta < 0.0f && target_y_ >= MaxScrollY())) return false;
     const float slack = window_ ? kSlack : 0.0f;
     target_y_ = Rubber(target_y_, -delta * kWheel, 0.0f, MaxScrollY(), slack);
     wheel_t_ = 1.0f;
@@ -347,6 +348,7 @@ bool ScrollViewer::OnWheel(float delta) {
 
 bool ScrollViewer::OnHWheel(float delta) {
     if (!horizontal_ || MaxScrollX() <= 0.0f) return false;
+    if ((delta < 0.0f && target_x_ <= 0.0f) || (delta > 0.0f && target_x_ >= MaxScrollX())) return false;
     const float slack = window_ ? kSlack : 0.0f;
     target_x_ = Rubber(target_x_, delta * kWheel, 0.0f, MaxScrollX(), slack);
     wheel_t_ = 1.0f;

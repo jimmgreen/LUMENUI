@@ -200,7 +200,8 @@ bool GridView::OnAnimate(float dt_seconds) {
             Invalidate();
         }
     }
-    return moving || Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    return moving || base;
 }
 
 void GridView::BeginEnter() {

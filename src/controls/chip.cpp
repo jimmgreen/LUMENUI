@@ -104,7 +104,8 @@ void Chip::OnFocusChanged(bool focused) {
 bool Chip::OnAnimate(float dt) {
     if (!selectable_ && !closable_) return false;
     const bool lit = (hovered_ || focused_) && enabled_;
-    return EaseTo(glow_t_, lit ? 1.0f : 0.0f, dt, 14.0f) || Control::OnAnimate(dt);
+    const bool base = Control::OnAnimate(dt);
+    return EaseTo(glow_t_, lit ? 1.0f : 0.0f, dt, 14.0f) || base;
 }
 
 CursorShape Chip::CursorAt(Point) const {

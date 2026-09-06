@@ -61,14 +61,165 @@ DWRITE_TEXT_ALIGNMENT MapAlign(Align align) {
 
 TextService& UiText() {
     static TextService instance;
-    static const bool ready = instance.Init();
-    (void)ready;
+    if (!instance.Factory()) instance.Init();
     return instance;
 }
 
 bool TextService::Init() {
+    if (factory_) return true;
     return SUCCEEDED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory3),
                                          reinterpret_cast<IUnknown**>(&factory_)));
+}
+
+void TextService::Reset() {
+    for (auto& entry : layouts_) {
+        if (entry.second.layout) entry.second.layout->Release();
+    }
+    layouts_.clear();
+    layout_lru_.clear();
+    family_formats_.clear();
+    icon_formats_.clear();
+    for (auto& format : formats_) format.reset();
+    tabular_.reset();
+    grayscale_params_.reset();
+    font_fallback_.reset();
+    custom_collection_.reset();
+    custom_files_.clear();
+    if (memory_loader_ && factory_) factory_->UnregisterFontFileLoader(memory_loader_.get());
+    memory_loader_.reset();
+    families_resolved_ = false;
+    body_family_[0] = icon_family_[0] = cjk_family_[0] = 0;
+    cjk_nudge_em_ = 0.0f;
+    family_depth_ = 0;
+    factory_.reset();
+}
+
+void TextService::PushFamily(std::wstring_view family) noexcept {
+    if (family_depth_ < kFamilyDepth) family_stack_[family_depth_] = family;
+    ++family_depth_;
+}
+
+void TextService::PopFamily() noexcept {
+    if (family_depth_ > 0) --family_depth_;
+}
+
+bool TextService::CollectionHasFamily(IDWriteFontCollection* collection,
+                                      std::wstring_view family) {
+    if (!collection || family.empty() || family.size() >= 128) return false;
+    wchar_t name[128];
+    wmemcpy(name, family.data(), family.size());
+    name[family.size()] = 0;
+    UINT32 index = 0;
+    BOOL exists = FALSE;
+    return SUCCEEDED(collection->FindFamilyName(name, &index, &exists)) && exists;
+}
+
+bool TextService::RebuildCustomCollection() {
+    custom_collection_.reset();
+    if (custom_files_.empty() || !factory_) return false;
+    ComPtr<IDWriteFactory5> factory5;
+    if (FAILED(factory_->QueryInterface(__uuidof(IDWriteFactory5),
+                                        reinterpret_cast<void**>(&factory5))) ||
+        !factory5) {
+        return false;
+    }
+    ComPtr<IDWriteFontSetBuilder1> builder;
+    if (FAILED(factory5->CreateFontSetBuilder(&builder)) || !builder) return false;
+    for (auto& file : custom_files_) {
+        builder->AddFontFile(file.get());
+    }
+    ComPtr<IDWriteFontSet> set;
+    if (FAILED(builder->CreateFontSet(&set)) || !set) return false;
+    return SUCCEEDED(factory5->CreateFontCollectionFromFontSet(set.get(), &custom_collection_)) &&
+           custom_collection_;
+}
+
+std::wstring TextService::RegisterFontFile(IDWriteFontFile* file) {
+    if (!file) return {};
+    BOOL supported = FALSE;
+    DWRITE_FONT_FILE_TYPE file_type = DWRITE_FONT_FILE_TYPE_UNKNOWN;
+    DWRITE_FONT_FACE_TYPE face_type = DWRITE_FONT_FACE_TYPE_UNKNOWN;
+    UINT32 faces = 0;
+    if (FAILED(file->Analyze(&supported, &file_type, &face_type, &faces)) || !supported ||
+        faces == 0) {
+        Log(LogLevel::Warn, L"AddFont: unsupported font data");
+        return {};
+    }
+    const size_t before = custom_files_.size();
+    ComPtr<IDWriteFontFile> keep;
+    file->AddRef();
+    keep.p = file;
+    custom_files_.push_back(std::move(keep));
+    if (!RebuildCustomCollection()) {
+        custom_files_.resize(before);
+        RebuildCustomCollection();
+        Log(LogLevel::Warn, L"AddFont: font collection rebuild failed");
+        return {};
+    }
+    ComPtr<IDWriteFontFace> face;
+    IDWriteFontFile* files[] = {file};
+    if (FAILED(factory_->CreateFontFace(face_type, 1, files, 0, DWRITE_FONT_SIMULATIONS_NONE,
+                                        &face)) ||
+        !face) {
+        return {};
+    }
+    ComPtr<IDWriteFontFace3> face3;
+    if (FAILED(face->QueryInterface(__uuidof(IDWriteFontFace3),
+                                    reinterpret_cast<void**>(&face3))) ||
+        !face3) {
+        return {};
+    }
+    ComPtr<IDWriteLocalizedStrings> names;
+    if (FAILED(face3->GetFamilyNames(&names)) || !names) return {};
+    UINT32 index = 0;
+    BOOL exists = FALSE;
+    names->FindLocaleName(L"en-us", &index, &exists);
+    if (!exists) index = 0;
+    UINT32 length = 0;
+    if (FAILED(names->GetStringLength(index, &length)) || length == 0) return {};
+    std::wstring result(length + 1, L'\0');
+    if (FAILED(names->GetString(index, result.data(), length + 1))) return {};
+    result.resize(length);
+    // 族名变化后旧的族覆盖格式可能落在系统集合上，全部重建。
+    family_formats_.clear();
+    return result;
+}
+
+std::wstring TextService::AddFont(std::span<const std::byte> data) {
+    if (data.empty() || !Init()) return {};
+    ComPtr<IDWriteFactory5> factory5;
+    if (FAILED(factory_->QueryInterface(__uuidof(IDWriteFactory5),
+                                        reinterpret_cast<void**>(&factory5))) ||
+        !factory5) {
+        return {};
+    }
+    if (!memory_loader_) {
+        if (FAILED(factory5->CreateInMemoryFontFileLoader(&memory_loader_)) || !memory_loader_) {
+            return {};
+        }
+        if (FAILED(factory5->RegisterFontFileLoader(memory_loader_.get()))) {
+            memory_loader_.reset();
+            return {};
+        }
+    }
+    // ownerObject 传空：DWrite 内部复制字节，调用方缓冲区可立即释放。
+    ComPtr<IDWriteFontFile> file;
+    if (FAILED(memory_loader_->CreateInMemoryFontFileReference(
+            factory_.get(), data.data(), static_cast<UINT32>(data.size()), nullptr, &file)) ||
+        !file) {
+        return {};
+    }
+    return RegisterFontFile(file.get());
+}
+
+std::wstring TextService::AddFontFile(std::wstring_view path) {
+    if (path.empty() || !Init()) return {};
+    ComPtr<IDWriteFontFile> file;
+    if (FAILED(factory_->CreateFontFileReference(std::wstring(path).c_str(), nullptr, &file)) ||
+        !file) {
+        return {};
+    }
+    return RegisterFontFile(file.get());
 }
 
 const wchar_t* TextService::ResolveFamily(const wchar_t* family, const wchar_t* fallback) {
@@ -173,25 +324,68 @@ void TextService::CacheFontMetrics() {
     cjk_nudge_em_ = Clamp(latin_em - cjk_em, -0.20f, 0.20f);
 }
 
-IDWriteTextFormat* TextService::Format(TextRole role) {
+void TextService::ApplyRoleFallback(IDWriteTextFormat* format, TextRole role) {
+    if (!format || !font_fallback_ || role == TextRole::Icon) return;
+    ComPtr<IDWriteTextFormat1> format1;
+    if (SUCCEEDED(format->QueryInterface(__uuidof(IDWriteTextFormat1),
+                                         reinterpret_cast<void**>(&format1))) &&
+        format1) {
+        format1->SetFontFallback(font_fallback_.get());
+    }
+}
+
+IDWriteTextFormat* TextService::RoleFormat(TextRole role) {
     const size_t index = static_cast<size_t>(role);
-    if (index >= kTextRoleCount) return nullptr;
+    if (index >= kTextRoleCount || !Init()) return nullptr;
     auto& format = formats_[index];
     if (!format) {
         const RoleSpec& spec = kRoles[index];
         factory_->CreateTextFormat(ResolveFamily(spec.family, spec.fallback), nullptr, spec.weight,
                                    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
                                    spec.size, L"en-US", &format);
-        if (format && font_fallback_ && role != TextRole::Icon) {
-            ComPtr<IDWriteTextFormat1> format1;
-            if (SUCCEEDED(format->QueryInterface(__uuidof(IDWriteTextFormat1),
-                                                 reinterpret_cast<void**>(&format1))) &&
-                format1) {
-                format1->SetFontFallback(font_fallback_.get());
-            }
-        }
+        ApplyRoleFallback(format.get(), role);
     }
     return format.get();
+}
+
+IDWriteTextFormat* TextService::FamilyFormat(TextRole role, std::wstring_view family) {
+    const size_t index = static_cast<size_t>(role);
+    if (index >= kTextRoleCount || role == TextRole::Icon) return RoleFormat(role);
+    const uint64_t key = HashText(family) ^ (static_cast<uint64_t>(index) * 0x9E3779B97F4A7C15ull);
+    if (auto it = family_formats_.find(key); it != family_formats_.end()) {
+        return it->second.format ? it->second.format.get() : RoleFormat(role);
+    }
+    // 先解析默认族，保证 font_fallback_ 已建好（自定义族缺字回退到 CJK/系统链）。
+    IDWriteTextFormat* fallback = RoleFormat(role);
+    IDWriteFontCollection* collection = nullptr;
+    if (CollectionHasFamily(custom_collection_.get(), family)) {
+        collection = custom_collection_.get();
+    } else {
+        ComPtr<IDWriteFontCollection> system;
+        factory_->GetSystemFontCollection(&system, FALSE);
+        if (!CollectionHasFamily(system.get(), family)) {
+            Log(LogLevel::Warn, L"font family not found: %.*s", static_cast<int>(family.size()),
+                family.data());
+            family_formats_.emplace(key, FamilyFormatEntry{{}, index});
+            return fallback;
+        }
+    }
+    const RoleSpec& spec = kRoles[index];
+    FamilyFormatEntry entry;
+    entry.role = index;
+    factory_->CreateTextFormat(std::wstring(family).c_str(), collection, spec.weight,
+                               DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, spec.size,
+                               L"en-US", &entry.format);
+    ApplyRoleFallback(entry.format.get(), role);
+    IDWriteTextFormat* result = entry.format ? entry.format.get() : fallback;
+    family_formats_.emplace(key, std::move(entry));
+    return result;
+}
+
+IDWriteTextFormat* TextService::Format(TextRole role) {
+    const std::wstring_view family = CurrentFamily();
+    if (!family.empty()) return FamilyFormat(role, family);
+    return RoleFormat(role);
 }
 
 IDWriteTextFormat* TextService::IconFormat(float size) {
@@ -334,6 +528,14 @@ void TextService::ApplyLayoutFeatures(IDWriteTextLayout* layout, IDWriteTextForm
         if (formats_[i].get() == format) {
             spec = &kRoles[i];
             break;
+        }
+    }
+    if (!spec) {
+        for (const auto& entry : family_formats_) {
+            if (entry.second.format.get() == format) {
+                spec = &kRoles[entry.second.role];
+                break;
+            }
         }
     }
     if (!spec) return;

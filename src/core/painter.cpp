@@ -63,7 +63,7 @@ Color LumaBackdropHint(Color ink, Color backdrop) noexcept {
 
 bool TryLumaDraw(ID2D1DeviceContext2* dc, LumaTextBridge* luma, std::wstring_view text,
                  IDWriteTextFormat* format, float dip_x, float dip_y, float dip_w, float dip_h,
-                 Align align, Color color, Color backdrop) {
+                 Align align, Color color, Color backdrop, bool prepare = false) {
     if (!dc || !luma || !format || dip_w <= 0.0f || dip_h <= 0.0f) return false;
     D2D1_MATRIX_3X2_F xf;
     dc->GetTransform(&xf);
@@ -87,9 +87,11 @@ bool TryLumaDraw(ID2D1DeviceContext2* dc, LumaTextBridge* luma, std::wstring_vie
     const float top = std::floor(y0 + 0.5f);
     const float bottom = std::max(std::floor(y1 + 0.5f), top + 1.0f);
     dc->SetTransform(D2D1::Matrix3x2F::Identity());
-    const bool drawn =
+    const bool drawn = prepare ?
+        luma->Prepare(text, format, D2D1_RECT_F{left, top, right, bottom}, ToD2D(color),
+                      ToD2D(LumaBackdropHint(color, backdrop)), luma_scale, MapAlign(align)) :
         luma->Draw(text, format, D2D1_RECT_F{left, top, right, bottom}, ToD2D(color),
-                   ToD2D(LumaBackdropHint(color, backdrop)), luma_scale, MapAlign(align));
+                  ToD2D(LumaBackdropHint(color, backdrop)), luma_scale, MapAlign(align));
     dc->SetTransform(xf);
     return drawn;
 }
@@ -124,6 +126,10 @@ float AdvanceUiText(std::wstring_view text, TextRole role, LumaTextBridge* luma)
     return UiText().MeasureText(text, role, 0.0f).w;
 }
 
+float Painter::AdvanceText(std::wstring_view text, TextRole role) {
+    return AdvanceUiText(text, role, luma_);
+}
+
 Size MeasureUiText(std::wstring_view text, TextRole role, float max_width, LumaTextBridge* luma) {
     if (text.empty()) return {};
     IDWriteTextFormat* format = UiText().Format(role);
@@ -138,6 +144,16 @@ Size MeasureUiText(std::wstring_view text, TextRole role, float max_width, LumaT
         }
     }
     return UiText().MeasureText(text, role, max_width);
+}
+
+FontFamilyScope::FontFamilyScope(std::wstring_view family) noexcept {
+    if (family.empty()) return;
+    UiText().PushFamily(family);
+    pushed_ = true;
+}
+
+FontFamilyScope::~FontFamilyScope() {
+    if (pushed_) UiText().PopFamily();
 }
 
 Painter::~Painter() { ReleaseBrushes(); }
@@ -1100,6 +1116,19 @@ void Painter::DrawText(std::wstring_view text, const Rect& r, TextRole role, Col
                         D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
 }
 
+void Painter::PrepareText(std::wstring_view text, const Rect& r, TextRole role, Color color,
+                          Align align, float max_width) {
+    if (!dc_ || !text_ || r.IsEmpty() || text.empty()) return;
+    const float width = max_width > 0.0f ? max_width : r.w;
+    IDWriteTextFormat* format = text_->Format(role);
+    if (!format) return;
+    Rect snapped = r;
+    snapped.y = Snap(r.y, scale_);
+    snapped.h = std::max(Snap(r.Bottom(), scale_) - snapped.y, 1.0f / scale_);
+    if (!TryLumaDraw(dc_, luma_, text, format, snapped.x, snapped.y, width, snapped.h,
+                     align, color, backdrop_, true)) text_->LineLayout(text, format, width, align);
+}
+
 Size Painter::MeasureText(std::wstring_view text, TextRole role, float max_width) {
     return MeasureUiText(text, role, max_width, luma_);
 }
@@ -1235,6 +1264,22 @@ void Painter::DrawIconPath(const char* svg_path, const Rect& r, Color color, flo
                            float weight, bool filled, bool fatten) {
     const float s = size < 0.0f ? icon::kSize : size;
     PaintPhosphor(svg_path, filled, fatten, r, s, color, Align::Center, weight);
+}
+
+void Painter::PrepareColor(Color color) { if (dc_) Brush(color); }
+
+void Painter::PrepareIcon(std::wstring_view glyph, const Rect& r, float size, Color color, Align align) {
+    if (!dc_ || r.IsEmpty() || glyph.empty() || size <= 0) return;
+    Brush(color);
+    if (const auto* spec = FindPhosphorIcon(glyph.front()); spec && spec->d) {
+        EnsureIconGeometry(spec->d);
+        return;
+    }
+    if (!text_) return;
+    auto* format = text_->IconFormat(size);
+    if (!format) return;
+    if (!TryLumaDraw(dc_, luma_, glyph, format, r.x, r.y, r.w, r.h, align, color, backdrop_, true))
+        text_->LineLayout(glyph, format, 1.0e5f, Align::Leading);
 }
 
 void Painter::DrawIcon(std::wstring_view glyph, const Rect& r, float size, Color color,

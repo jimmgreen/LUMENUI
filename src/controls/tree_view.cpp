@@ -323,7 +323,8 @@ void TreeView::OnFocusChanged(bool focused) {
 bool TreeView::OnAnimate(float dt_seconds) {
     bool moving = EaseTo(scroll_offset_, target_offset_, dt_seconds, 20.0f, 0.1f);
     moving |= EaseTo(expand_progress_, (hovered_ || dragging_) ? 1.0f : 0.0f, dt_seconds, 18.0f);
-    return moving || Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    return moving || base;
 }
 
 Rect TreeView::VerticalTrack() const noexcept {

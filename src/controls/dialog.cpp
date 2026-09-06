@@ -318,7 +318,7 @@ void Dialog::ArmEnter() {
 
 bool Dialog::OnAnimate(float dt) {
     bool more = Control::OnAnimate(dt);
-    if (enter_.Tick(dt)) {
+    if (AdvanceAnimation(enter_, dt)) {
         Invalidate();
         more = true;
     }

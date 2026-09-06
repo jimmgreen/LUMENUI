@@ -1,13 +1,20 @@
 cmake_minimum_required(VERSION 3.25)
 project(lumen VERSION 0.1.0 LANGUAGES CXX RC)
 
+# 修正中文 VS18 / CMake 的 UTF-8 依赖前缀误解码，防止头文件漏编。
+if(MSVC AND CMAKE_CL_SHOWINCLUDES_PREFIX MATCHES "^娉ㄦ剰:")
+    set(CMAKE_CL_SHOWINCLUDES_PREFIX "注意: 包含文件: ")
+endif()
+
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_compile_options(/W4 /permissive- /utf-8 /EHsc)
-add_compile_definitions(UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
 
 # ---- LumaText 文字渲染（可选；找到时启用，找不到时回退 DirectWrite）----
 option(LUMEN_WITH_LUMATEXT "Use LumaText for text rendering" ON)
@@ -54,15 +61,23 @@ if(LUMEN_WITH_LUMATEXT)
             "${CMAKE_BINARY_DIR}/_deps/lumatext" EXCLUDE_FROM_ALL)
         set(CMAKE_SKIP_INSTALL_RULES "${_lumen_skip_install}")
     else()
-        find_package(LumaText 0.1 CONFIG QUIET)
+        find_package(LumaText 0.1 CONFIG QUIET GLOBAL)
     endif()
 
+    # 延迟加载的 DLL 文件名：桥接代码先按含 lumen 的模块目录 LoadLibrary，再让延迟加载助手复用。
+    set(LUMEN_LUMATEXT_DLL "lumatext.dll")
     if(TARGET lumatext_shared)
         set(LUMEN_LUMATEXT_TARGET LumaText::D2D)
         set(LUMEN_LUMATEXT_RUNTIME_TARGET lumatext_shared)
+        # 不用 $<TARGET_FILE_NAME:lumatext_shared>：该目标不在 lumen 的导出集里，装 SDK 后会解析失败。
+        set(LUMEN_LUMATEXT_DLL "lumatext$<$<CONFIG:Debug>:d>.dll")
         message(STATUS "lumen text renderer: LumaText shared library")
     elseif(TARGET LumaText::D2D)
         set(LUMEN_LUMATEXT_TARGET LumaText::D2D)
+        if(TARGET LumaText::Shared)
+            set(LUMEN_LUMATEXT_RUNTIME_TARGET LumaText::Shared)
+            set(LUMEN_LUMATEXT_DLL "lumatext$<$<CONFIG:Debug>:d>.dll")
+        endif()
         message(STATUS "lumen text renderer: LumaText (prebuilt)")
     else()
         if(LUMEN_REQUIRE_LUMATEXT)
@@ -73,53 +88,7 @@ if(LUMEN_WITH_LUMATEXT)
     endif()
 endif()
 
-# 把 LumaText 桥接实现编进 target；is_exe=TRUE 时额外拷贝 DLL 到输出目录。
-function(lumen_enable_lumatext target is_exe)
-    if(NOT is_exe)
-        target_sources(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/lumatext_bridge.cpp)
-    endif()
-    if(LUMEN_LUMATEXT_TARGET)
-        target_compile_definitions(${target} PRIVATE LUMEN_HAS_LUMATEXT=1)
-        target_link_libraries(${target} PRIVATE ${LUMEN_LUMATEXT_TARGET})
-    endif()
-    if(is_exe)
-        get_property(_lumen_rt TARGET lumen PROPERTY LUMEN_LUMATEXT_RUNTIME)
-        if(_lumen_rt)
-            add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE:${_lumen_rt}>
-                    $<TARGET_FILE_DIR:${target}>)
-            if(LUMATEXT_SOURCE_DIR)
-                add_custom_command(TARGET ${target} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E make_directory
-                        $<TARGET_FILE_DIR:${target}>/licenses/LumaText
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${LUMATEXT_SOURCE_DIR}/LICENSE"
-                        $<TARGET_FILE_DIR:${target}>/licenses/LumaText/LumaText.txt
-                    COMMAND ${CMAKE_COMMAND} -E copy_directory
-                        "${LUMATEXT_SOURCE_DIR}/LICENSES"
-                        $<TARGET_FILE_DIR:${target}>/licenses/LumaText)
-            endif()
-        endif()
-    endif()
-endfunction()
-
-# 给外部可执行文件拷贝 lumatext.dll（与库内测试/Gallery 同一套）。
-function(lumen_copy_runtime target)
-    lumen_enable_lumatext(${target} TRUE)
-endfunction()
-
-# WIN32 + lumen::lumen/lumen::main + 运行时 DLL + /utf-8。
-function(lumen_add_executable name)
-    add_executable(${name} WIN32 ${ARGN})
-    target_link_libraries(${name} PRIVATE lumen::lumen lumen::main)
-    lumen_copy_runtime(${name})
-    if(MSVC)
-        target_compile_options(${name} PRIVATE /utf-8 /permissive-)
-        target_compile_definitions(${name} PRIVATE NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
-    endif()
-endfunction()
-
+include(cmake/lumenRuntime.cmake)
 if(PROJECT_IS_TOP_LEVEL)
     set(LUMEN_DEFAULT_APPS ON)
 else()
@@ -151,6 +120,7 @@ add_library(lumen STATIC
     src/core/timer_host.cpp
     src/core/uia.cpp
     src/core/menu_window.cpp
+    src/core/popup_window.cpp
     src/core/draw_tree.cpp
     src/controls/button.cpp
     src/controls/repeat_button.cpp
@@ -240,13 +210,31 @@ target_include_directories(lumen
 target_compile_features(lumen PUBLIC cxx_std_20)
 target_compile_definitions(lumen PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
 if(MSVC)
-    target_compile_options(lumen PUBLIC /permissive- /utf-8)
+    target_compile_options(lumen PUBLIC /utf-8)
 endif()
 target_link_libraries(lumen PUBLIC
     d3d11 d2d1 dwrite dxgi dcomp dwmapi psapi shcore user32 gdi32 windowscodecs uuid imm32 ole32 oleaut32 uiautomationcore shell32 advapi32)
-lumen_enable_lumatext(lumen FALSE)
+target_sources(lumen PRIVATE src/core/lumatext_bridge.cpp)
+if(LUMEN_LUMATEXT_TARGET)
+    target_compile_definitions(lumen PRIVATE LUMEN_HAS_LUMATEXT=1
+        "LUMEN_LUMATEXT_DLL=\"${LUMEN_LUMATEXT_DLL}\"")
+    target_link_libraries(lumen PRIVATE ${LUMEN_LUMATEXT_TARGET})
+    if(MSVC)
+        target_link_libraries(lumen PUBLIC delayimp)
+        target_link_options(lumen INTERFACE "/DELAYLOAD:${LUMEN_LUMATEXT_DLL}" "/DELAY:UNLOAD")
+    endif()
+endif()
 if(LUMEN_LUMATEXT_RUNTIME_TARGET)
     set_property(TARGET lumen PROPERTY LUMEN_LUMATEXT_RUNTIME ${LUMEN_LUMATEXT_RUNTIME_TARGET})
+endif()
+if(LUMEN_LUMATEXT_RUNTIME_TARGET AND LUMATEXT_SOURCE_DIR)
+    set(_lumen_licenses "${CMAKE_CURRENT_BINARY_DIR}/runtime-licenses/LumaText")
+    file(MAKE_DIRECTORY "${_lumen_licenses}")
+    configure_file("${LUMATEXT_SOURCE_DIR}/LICENSE" "${_lumen_licenses}/LumaText.txt" COPYONLY)
+    if(EXISTS "${LUMATEXT_SOURCE_DIR}/LICENSES")
+        file(COPY "${LUMATEXT_SOURCE_DIR}/LICENSES/" DESTINATION "${_lumen_licenses}")
+    endif()
+    set_property(TARGET lumen PROPERTY LUMEN_RUNTIME_LICENSES "${_lumen_licenses}")
 endif()
 add_library(lumen::lumen ALIAS lumen)
 
@@ -263,6 +251,12 @@ file(GLOB LUMEN_PUBLIC_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/lumen/*.h")
 
 if(LUMEN_BUILD_EXAMPLES)
+    add_library(lumen_host_plugin SHARED examples/host/host_plugin.cpp)
+    target_link_libraries(lumen_host_plugin PRIVATE lumen)
+    lumen_copy_runtime(lumen_host_plugin)
+    add_executable(lumen_host_test examples/host/host_driver.cpp)
+    target_link_libraries(lumen_host_test PRIVATE user32)
+    add_dependencies(lumen_host_test lumen_host_plugin)
     add_executable(lumen_gallery WIN32
         examples/gallery/main.cpp
         examples/gallery/common.cpp
@@ -307,6 +301,11 @@ if(LUMEN_BUILD_TESTS)
     target_link_libraries(lumen_perf_test PRIVATE lumen)
     lumen_copy_runtime(lumen_perf_test)
 
+    if(LUMEN_LUMATEXT_TARGET)
+        target_compile_definitions(lumen_visual_test PRIVATE LUMEN_HAS_LUMATEXT=1)
+        target_compile_definitions(lumen_perf_test PRIVATE LUMEN_HAS_LUMATEXT=1)
+    endif()
+
     add_executable(lumen_anim_test tests/anim/main.cpp)
     target_include_directories(lumen_anim_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(lumen_anim_test PRIVATE lumen)
@@ -339,6 +338,14 @@ if(LUMEN_BUILD_TESTS)
         APPEND PROPERTY OBJECT_DEPENDS ${LUMEN_PUBLIC_HEADERS})
 endif()
 
+# 仅本目录自有目标使用严格编译策略，不干扰 ObjectARX 或第三方子目录。
+if(MSVC)
+    get_property(_lumen_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_target IN LISTS _lumen_targets)
+        target_compile_options(${_target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+    endforeach()
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -350,6 +357,14 @@ install(TARGETS lumen lumen_main
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY include/lumen DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
+set_target_properties(lumen lumen_main PROPERTIES DEBUG_POSTFIX d)
+set(LUMEN_HAS_BUNDLED_LUMATEXT OFF)
+set(LUMEN_HAS_EXTERNAL_LUMATEXT OFF)
+if(LUMEN_LUMATEXT_RUNTIME_TARGET)
+    set(LUMEN_HAS_BUNDLED_LUMATEXT ON)
+elseif(LUMEN_LUMATEXT_TARGET)
+    set(LUMEN_HAS_EXTERNAL_LUMATEXT ON)
+endif()
 set(LUMEN_CMAKE_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/lumen)
 install(EXPORT lumenTargets
     FILE lumenTargets.cmake
@@ -358,12 +373,14 @@ install(EXPORT lumenTargets
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/lumenConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/lumenConfig.cmake
-    INSTALL_DESTINATION ${LUMEN_CMAKE_INSTALL_DIR})
+    INSTALL_DESTINATION ${LUMEN_CMAKE_INSTALL_DIR}
+    PATH_VARS CMAKE_INSTALL_LIBDIR CMAKE_INSTALL_BINDIR)
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/lumenConfigVersion.cmake
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY SameMajorVersion)
 install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/lumenRuntime.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/lumenConfig.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/lumenConfigVersion.cmake
     DESTINATION ${LUMEN_CMAKE_INSTALL_DIR})

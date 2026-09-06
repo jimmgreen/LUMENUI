@@ -75,6 +75,33 @@ LumaText 缺失时 configure 会 `WARNING`，运行回退 DirectWrite；强制�
 
 `lumen/lumen.h` 拉齐全部头，适合 Gallery 与演示。UTF-8 用 `lumen::U8("你好")`。
 
+给 AI：把本仓库的 `.cursor/skills/lumen/`（Cursor）或 `.grok/skills/lumen/`（Grok）拷进你的工程。写界面、加控件时代理会按库约定动手，不必每次贴 `AGENTS.md`。
+
+### 宿主嵌入（AutoCAD .arx / Office / VS 插件）
+
+lumen 被别的进程加载时，不能碰进程级状态（DPI 感知、`EnableMouseInPointer`、`PostQuitMessage`、`GetModuleHandle(nullptr)`）。建第一个窗口前置 `App::HostMode(true)`，窗口带 `owner`，模块卸载前 `App::Shutdown()`：
+
+```cpp
+App::HostMode(true);
+App::LumaTextLibrary(L"C:\\Plugins\\MyArx\\lumatext.dll");   // 可选：不放 .arx 旁边时
+const std::wstring brand = App::AddFont(L"C:\\Plugins\\MyArx\\brand.ttf");
+void* acad_frame = nullptr;   // adsw_acadMainWnd()
+Window panel(WindowSpec{.title = L"面板", .size = {480.0f, 320.0f}, .owner = acad_frame});
+panel.Root().Add<Label>(L"标题").FontFamily(brand);
+panel.Show();
+// ...宿主自己泵消息；Window::Post 可从工作线程回到 UI 线程
+// kUnloadAppMsg：所有 Window 析构后
+App::Shutdown();
+```
+
+- 窗口在 PMv2 线程 DPI 上下文里创建，宿主进程即使只是 System Aware 也不发糊，且不改宿主的感知级别。
+- 窗口类挂在含 lumen 代码的模块上（注册时会先注销上次卸载遗留的同名类）；`Shutdown` 注销类、释放 DWrite/字体/布局缓存，进程回到未初始化态，重载 .arx 再建窗口会重新初始化。
+- 宿主模式最后一个窗口关闭不投 `WM_QUIT`，也不需要 `App::Run`。
+- 失焦会清逻辑焦点（HasFocus / 焦点环 / 插入符）；`ClearFocus()` / `Blur()` 显式清除且不在下次 SETFOCUS 时恢复。要把键盘还给宿主，调用方再 `SetFocus(owner)`。
+- `OnNativeMessage` / `BindNativeMessage` 在默认 WndProc 之前观察原生消息；不要轮询 `GetFocus()`，回调里不要泵消息。
+- `lumatext.dll` 走延迟加载：默认先在含 lumen 的模块（.arx）所在目录找，再按系统搜索顺序；`App::LumaTextLibrary` 指定完整路径。找不到整进程回退 DirectWrite。
+- 静态链接 `lumen.lib` 进 .arx 时，`lumen_copy_runtime(target)` 会把 `lumatext.dll` 拷到 .arx 输出目录。
+
 ## 开始
 
 ```cpp

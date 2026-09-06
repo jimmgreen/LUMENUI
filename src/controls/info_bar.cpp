@@ -34,13 +34,11 @@ InfoBar& InfoBar::Action(std::wstring_view label, std::function<void()> on_click
         action_ = &Add<Button>(std::wstring(label), ButtonKind::Subtle);
         action_->SizeClass(ButtonSize::Small).Height(kActionH);
         action_->Visible(!label.empty());
+        action_->OnClick([this] { if (action_cb_) action_cb_(); });
     } else {
         action_->Text(std::wstring(label));
         action_->Visible(!label.empty());
     }
-    action_->OnClick([this] {
-        if (action_cb_) action_cb_();
-    });
     RelayoutParent();
     return *this;
 }

@@ -16,17 +16,10 @@
 
 namespace lumen {
 namespace {
-constexpr double kToastIn = 0.22;
 constexpr double kToastHold = 2.4;
-constexpr double kToastStagger = 0.38;
-
-float ToastOutSeconds(ToastMotion motion) noexcept {
-    switch (motion) {
-    case ToastMotion::SlideRight: return 0.36f;
-    case ToastMotion::SlideDown: return 0.30f;
-    case ToastMotion::Scale: return 0.22f;
-    default: return 0.25f;
-    }
+bool MotionEase(float& value, float target, float dt, const Theme& theme, float speed, float epsilon) {
+    if (theme.motion_scale <= 0.001f) { value = target; return false; }
+    return EaseTo(value, target, dt / theme.motion_scale, speed, epsilon);
 }
 }
 
@@ -324,11 +317,26 @@ void WindowImpl::SetToastMotion(ToastMotion motion) {
     toast_motion_ = motion;
 }
 
+void WindowImpl::SetToastMargin(float margin) noexcept {
+    margin = std::max(8.0f, margin);
+    if (toast_margin_ == margin) return;
+    toast_margin_ = margin;
+    if (!toasts_.empty()) RequestAnimation();
+}
+
+void WindowImpl::SetToastPlacement(ToastPlacement placement) {
+    if (toast_placement_ == placement) return;
+    toast_placement_ = placement;
+    // 已有牌堆平滑飞往新角，不靠下一次无关重绘兜底。
+    if (!toasts_.empty()) RequestAnimation();
+}
+
 bool WindowImpl::ToastPersist(const Toast& toast) const noexcept {
     return toast.hold_seconds <= 0.0f;
 }
 
 float WindowImpl::ToastHeight(const Toast& toast) const noexcept {
+    if (!toast.title.empty()) return 64.0f;
     return (toast.action.empty() && !ToastPersist(toast)) ? 40.0f : 44.0f;
 }
 
@@ -349,7 +357,9 @@ void WindowImpl::BeginToastExit(Toast& toast, double now) {
 }
 
 void WindowImpl::ClearToastHover() {
-    bool dirty = false;
+    toast_cursor_valid_ = false;
+    toast_stack_hot_ = false;
+    bool dirty = toast_expand_ > 0.0f;
     for (Toast& toast : toasts_) {
         if (!toast.hovering && !toast.action_hot && !toast.close_hot) continue;
         toast.hovering = false;
@@ -357,7 +367,10 @@ void WindowImpl::ClearToastHover() {
         toast.close_hot = false;
         dirty = true;
     }
-    if (dirty) Invalidate();
+    if (dirty) {
+        Invalidate();
+        RequestAnimation();
+    }
 }
 
 WindowImpl::ToastPart WindowImpl::HitToast(Point p, ptrdiff_t* index) const {
@@ -384,8 +397,13 @@ WindowImpl::ToastPart WindowImpl::HitToast(Point p, ptrdiff_t* index) const {
 }
 
 bool WindowImpl::UpdateToastHover(Point p) {
+    toast_cursor_ = p;
+    toast_cursor_valid_ = true;
     ptrdiff_t index = -1;
     const ToastPart part = HitToast(p, &index);
+    const bool hot = !toast_hot_region_.IsEmpty() && toast_hot_region_.Contains(p);
+    const bool was_hot = toast_stack_hot_;
+    toast_stack_hot_ = hot;
     bool dirty = false;
     for (size_t i = 0; i < toasts_.size(); ++i) {
         Toast& toast = toasts_[i];
@@ -399,11 +417,11 @@ bool WindowImpl::UpdateToastHover(Point p) {
             dirty = true;
         }
     }
-    if (dirty) {
+    if (dirty || hot != was_hot) {
         Invalidate();
         RequestAnimation();
     }
-    return part != ToastPart::None;
+    return hot;
 }
 
 void WindowImpl::ShowToast(std::wstring_view text) {
@@ -416,9 +434,10 @@ void WindowImpl::ShowToast(std::wstring_view text) {
 void WindowImpl::ShowToast(ToastData data) {
     double born = clock_seconds();
     if (!toasts_.empty()) {
-        born = std::max(born, toasts_.back().born_seconds + kToastStagger);
+        born = std::max(born, toasts_.back().born_seconds + theme_.duration_slow * theme_.motion_scale);
     }
     Toast toast;
+    toast.title = std::move(data.title);
     toast.text = std::move(data.text);
     toast.glyph = std::move(data.glyph);
     toast.action = std::move(data.action);
@@ -432,52 +451,117 @@ void WindowImpl::ShowToast(ToastData data) {
 }
 
 bool WindowImpl::TickToasts(double now_seconds) {
-    bool alive = false;
-    const double out = static_cast<double>(ToastOutSeconds(toast_motion_));
+    bool animating = false;
+    const double out = theme_.duration_fast * theme_.motion_scale;
     for (auto it = toasts_.begin(); it != toasts_.end();) {
         if (it->exiting) {
             if (now_seconds - it->exit_start > out) {
                 it = toasts_.erase(it);
                 continue;
             }
-            alive = true;
+            animating = true;
             ++it;
             continue;
         }
         const double age = now_seconds - it->born_seconds - it->pause_seconds;
-        if (age >= 0.0 && !ToastPersist(*it) && age > kToastIn + static_cast<double>(it->hold_seconds)) {
+        if (age >= 0.0 && !ToastPersist(*it) &&
+            age > theme_.duration_normal * theme_.motion_scale + static_cast<double>(it->hold_seconds)) {
+            if (theme_.motion_scale <= 0.001f) { it = toasts_.erase(it); continue; }
             it->exiting = true;
             it->exit_start = now_seconds;
+            animating = true;
+            ++it;
+            continue;
         }
-        alive = true;
+        if (age < 0.0) animating = true;   // 错峰等待出生
         ++it;
     }
-    return alive;
+    return animating;
+}
+
+void WindowImpl::UpdateToastWake(double now_seconds) {
+    double wake = 0.0;
+    for (const Toast& toast : toasts_) {
+        if (toast.exiting) continue;
+        const double anchor = toast.born_seconds + toast.pause_seconds;
+        if (anchor > now_seconds) wake = wake == 0.0 ? anchor : std::min(wake, anchor);
+        if (!ToastPersist(toast)) {
+            const double expire = anchor + theme_.duration_normal * theme_.motion_scale + static_cast<double>(toast.hold_seconds);
+            if (expire > now_seconds) wake = wake == 0.0 ? expire : std::min(wake, expire);
+        }
+    }
+    if (wake == 0.0) {
+        if (toast_wake_armed_ && hwnd_) KillTimer(hwnd_, kToastWakeTimerId);
+        toast_wake_armed_ = false;
+        return;
+    }
+    if (toast_wake_armed_ && std::fabs(wake - toast_wake_at_) < 0.1) return;
+    if (hwnd_) {
+        const UINT ms = static_cast<UINT>(Clamp((wake - now_seconds) * 1000.0, 1.0, 60000.0));
+        SetTimer(hwnd_, kToastWakeTimerId, ms, nullptr);
+        toast_wake_armed_ = true;
+        toast_wake_at_ = wake;
+    }
 }
 
 void WindowImpl::DrawToasts(Painter& painter, const Theme& theme, const Rect& client) {
-    if (toasts_.empty()) return;
     const double now = clock_seconds();
+    if (toasts_.empty()) {
+        toast_tick_ = 0.0;
+        toast_hot_region_ = {};
+        toast_expand_ = 0.0f;
+        toast_stack_hot_ = false;
+        UpdateToastWake(now);
+        return;
+    }
     const bool alive = TickToasts(now);
     float dt = 1.0f / 60.0f;
     if (toast_tick_ > 0.0) dt = Clamp(static_cast<float>(now - toast_tick_), 0.0f, 0.1f);
     toast_tick_ = now;
 
+    // 热区取上一帧包围盒：指针不动而新 toast 滑进来时也当帧重估，hover 状态不会卡旧值。
+    const bool hot = toast_cursor_valid_ && !toast_hot_region_.IsEmpty() &&
+                     toast_hot_region_.Contains(toast_cursor_);
+    toast_stack_hot_ = hot;
+    bool expanding = MotionEase(toast_expand_, hot ? 1.0f : 0.0f, dt, theme, 14.0f, 0.004f);
+
     constexpr float kWidth = 340.0f;
     constexpr float kGap = 8.0f;
-    constexpr float kMargin = 20.0f;
-    const float kOut = ToastOutSeconds(toast_motion_);
+    constexpr float kPeek = 12.0f;        // 折叠时每层露出的上沿高度
+    constexpr float kLayerScale = 0.05f;  // 每深一层再收 5% 宽高
+    constexpr float kMaxBehind = 3.0f;    // 折叠最多露 3 层背后卡片，更深的先淡出
+    const float kOut = std::max(0.001f, theme.duration_fast * theme.motion_scale);
+    const double kIn = theme.duration_normal * theme.motion_scale;
     const size_t n = toasts_.size();
+    // 锚边：牌堆前沿贴住停靠角，折叠层沿 dir（锚边指向牌堆内部）展开。
+    const bool top_side = toast_placement_ >= ToastPlacement::TopRight;
+    const bool left_side = toast_placement_ == ToastPlacement::BottomLeft ||
+                           toast_placement_ == ToastPlacement::TopLeft;
+    const bool h_center = toast_placement_ == ToastPlacement::BottomCenter ||
+                          toast_placement_ == ToastPlacement::TopCenter;
+    const float dir = top_side ? 1.0f : -1.0f;   // y 向下为正
+    const float margin = toast_margin_;
+    const float anchor_y = top_side ? client.y + CaptionHeight() + margin
+                                    : client.Bottom() - margin;
+    float center_x = client.x + client.w * 0.5f;
+    if (!h_center) {
+        center_x = left_side ? client.x + margin + kWidth * 0.5f
+                             : client.Right() - margin - kWidth * 0.5f;
+    }
+    const float front_top = anchor_y + (top_side ? 0.0f : -ToastHeight(toasts_[n - 1]));
+    const float settled = 1.0f - toast_expand_;   // 1 = 完全折叠
     bool sliding = false;
+    Rect deck{};   // 本帧全体卡片包围盒，帧末写入 toast_hot_region_
     for (size_t i = 0; i < n; ++i) {
         Toast& toast = toasts_[i];
         const float kHeight = ToastHeight(toast);
-        float target = client.Bottom() - kMargin;
-        for (size_t k = n; k-- > i;) {
-            target -= ToastHeight(toasts_[k]);
-            if (k == i) break;
-            target -= kGap;
-        }
+        float expanded_top = front_top;
+        for (size_t k = i; k < n - 1; ++k) expanded_top += dir * (ToastHeight(toasts_[k]) + kGap);
+        const float depth = static_cast<float>(n - 1 - i);   // 距前沿的层数
+        const float shrink = std::max(0.82f, 1.0f - depth * kLayerScale);
+        const float target_y = expanded_top + (front_top + dir * depth * kPeek - expanded_top) * settled;
+        const float target_scale = 1.0f + (shrink - 1.0f) * settled;
+
         const double age = now - toast.born_seconds - toast.pause_seconds;
         if (age < 0.0) {
             toast.card = {};
@@ -485,43 +569,61 @@ void WindowImpl::DrawToasts(Painter& painter, const Theme& theme, const Rect& cl
             toast.close_rect = {};
             continue;
         }
-        if (toast.hovering && !toast.exiting) toast.pause_seconds += static_cast<double>(dt);
+        // hover 牌堆任意位置：整堆停留计时一起暂停（Base UI 语义）。
+        if (hot && !toast.exiting) toast.pause_seconds += static_cast<double>(dt);
         if (!toast.placed) {
-            toast.y = target + 16.0f;
+            toast.y = target_y - dir * 16.0f;   // 自锚边外侧滑入
+            toast.scale = target_scale;
             toast.placed = true;
         }
-        sliding = EaseTo(toast.y, target, dt, 16.0f, 0.25f) || sliding;
+        sliding = MotionEase(toast.y, target_y, dt, theme, 16.0f, 0.25f) || sliding;
+        expanding = MotionEase(toast.scale, target_scale, dt, theme, 14.0f, 0.002f) || expanding;
 
         float alpha = 1.0f;
         float exit_x = 0.0f;
         float exit_y = 0.0f;
         float scale = 1.0f;
+        // 折叠时背后的卡片不做方向性退场：原地淡出、上沿缩回前卡后面。
+        const bool tucked = depth >= 1.0f && toast_expand_ < 0.5f;
         if (toast.exiting) {
             const float t = Clamp(static_cast<float>((now - toast.exit_start) / kOut), 0.0f, 1.0f);
             const float e = EaseAt(t, Ease::CssEaseIn);
-            switch (toast_motion_) {
-            case ToastMotion::SlideRight:
-                exit_x = e * (kWidth + kMargin + 16.0f);
-                break;
-            case ToastMotion::SlideDown:
-                exit_y = e * (kHeight + 24.0f);
-                alpha = 1.0f - 0.25f * e;
-                break;
-            case ToastMotion::Scale:
-                scale = 1.0f - 0.38f * e;
+            if (tucked) {
                 alpha = 1.0f - e;
-                break;
-            default:
-                alpha = 1.0f - e;
-                exit_y = -10.0f * e;
-                break;
+                exit_y = -dir * kPeek * e;   // 上沿缩回前卡后面
+            } else {
+                switch (toast_motion_) {
+                case ToastMotion::SlideRight:
+                    exit_x = e * (kWidth + margin + 16.0f) * (left_side ? -1.0f : 1.0f);
+                    break;
+                case ToastMotion::SlideDown:
+                    exit_y = -dir * e * (kHeight + 24.0f);
+                    alpha = 1.0f - 0.25f * e;
+                    break;
+                case ToastMotion::Scale:
+                    scale = 1.0f - 0.38f * e;
+                    alpha = 1.0f - e;
+                    break;
+                default:
+                    alpha = 1.0f - e;
+                    exit_y = -10.0f * e;
+                    break;
+                }
             }
-        } else if (age < kToastIn) {
-            alpha = EaseAt(static_cast<float>(age / kToastIn), Ease::CssEaseOut);
+        } else if (age < kIn) {
+            alpha = EaseAt(static_cast<float>(age / kIn), theme.ease_enter);
         }
-        const Rect card{client.Right() - kMargin - kWidth + exit_x, toast.y + exit_y, kWidth,
-                         kHeight};
+        if (depth > kMaxBehind) {
+            alpha *= Clamp(kMaxBehind - depth + 1.0f + toast_expand_ * depth, 0.0f, 1.0f);
+        }
+        // 背后卡片比前沿略暗，撑出牌堆纵深；展开时回到全亮。
+        alpha *= 1.0f - 0.18f * settled * Clamp(depth * 0.5f, 0.0f, 1.0f);
+
+        const float w = kWidth * toast.scale;
+        const float h = kHeight * toast.scale;
+        const Rect card{center_x - w * 0.5f + exit_x, toast.y + exit_y, w, h};
         toast.card = card;
+        if (!toast.exiting && alpha > 0.01f) deck = UnionRect(deck, card);
         const bool scaled = scale < 0.999f;
         if (scaled) {
             painter.PushScale({card.x + card.w * 0.5f, card.y + card.h * 0.5f}, scale, scale);
@@ -533,28 +635,31 @@ void WindowImpl::DrawToasts(Painter& painter, const Theme& theme, const Rect& cl
             fill = theme.fill_input_hover;
         }
         fill.a *= alpha;
-        DrawElevated(painter, theme, card, 10.0f, Elevation::Overlay, fill);
-        Color glow = theme.glow_sm;
-        glow.a *= alpha;
+        // Toast 刻意扁平：无外发光/镜面，只留卡片描边（与全库 Elevated 卡区分）。
+        painter.FillRoundedRect(card, 10.0f, fill);
+        Color stroke = theme.stroke_card;
+        stroke.a *= alpha;
+        painter.StrokeRoundedRect(card, 10.0f, stroke);
+        // 折叠的背后层只露干净的上沿：内容（字形/圆点/文字/操作）展开时才浮现。
+        const float content_a = Clamp(1.0f - settled * depth * 2.0f, 0.0f, 1.0f);
         Color ink = theme.text;
-        ink.a *= alpha;
+        ink.a *= alpha * content_a;
         Color muted = theme.text_secondary;
-        muted.a *= alpha;
+        muted.a *= alpha * content_a;
 
         const wchar_t* glyph = ToastGlyph(toast);
         float text_x = card.x + 14.0f;
         if (glyph) {
             const Rect glyph_box{card.x + 12.0f, card.y + (card.h - 24.0f) * 0.5f, 24.0f, 24.0f};
             Color well = theme.fill_hover;
-            well.a *= alpha;
+            well.a *= alpha * content_a;
             painter.FillRoundedRect(glyph_box, 6.0f, well);
             painter.DrawIcon(glyph, glyph_box, 16.0f, ink);
             text_x = glyph_box.Right() + 8.0f;
         } else {
             Color dot = theme.accent;
-            dot.a *= alpha;
+            dot.a *= alpha * content_a;
             const Rect dot_rect{card.x + 16.0f, card.y + (card.h - 8.0f) * 0.5f, 8.0f, 8.0f};
-            painter.DrawGlow(dot_rect, 4.0f, glow);
             painter.FillRoundedRect(dot_rect, 4.0f, dot);
             text_x = card.x + 36.0f;
         }
@@ -562,7 +667,9 @@ void WindowImpl::DrawToasts(Painter& painter, const Theme& theme, const Rect& cl
         float text_right = card.Right() - 14.0f;
         toast.close_rect = {};
         toast.action_rect = {};
-        if (ToastPersist(toast) && !toast.exiting) {
+        // 折叠层上没有可点的部件：操作钮/×只在前沿或展开态参与命中。
+        const bool interactive = depth < 0.5f || toast_expand_ > 0.5f;
+        if (interactive && ToastPersist(toast) && !toast.exiting) {
             const Rect close{card.Right() - 10.0f - 24.0f, card.y + (card.h - 24.0f) * 0.5f, 24.0f,
                              24.0f};
             toast.close_rect = close;
@@ -574,7 +681,7 @@ void WindowImpl::DrawToasts(Painter& painter, const Theme& theme, const Rect& cl
             painter.DrawIcon(icon::kClose, close, 14.0f, muted);
             text_right = close.x - 6.0f;
         }
-        if (!toast.action.empty() && !toast.exiting) {
+        if (interactive && !toast.action.empty() && !toast.exiting) {
             const float action_w =
                 std::max(36.0f, painter.MeasureText(toast.action, TextRole::CaptionStrong).w + 16.0f);
             const Rect action{text_right - action_w, card.y + (card.h - 28.0f) * 0.5f, action_w, 28.0f};
@@ -588,12 +695,33 @@ void WindowImpl::DrawToasts(Painter& painter, const Theme& theme, const Rect& cl
             text_right = action.x - 8.0f;
         }
 
-        painter.DrawText(toast.text, {text_x, card.y, std::max(24.0f, text_right - text_x), card.h},
-                         TextRole::Body, ink);
+        const float text_w = std::max(24.0f, text_right - text_x);
+        if (!toast.title.empty()) {
+            constexpr float kPadY = 10.0f;
+            constexpr float kLineH = 20.0f;
+            constexpr float kTitleGap = 4.0f;
+            painter.DrawText(toast.title, {text_x, card.y + kPadY, text_w, kLineH},
+                             TextRole::BodyStrong, ink);
+            painter.DrawText(toast.text,
+                             {text_x, card.y + kPadY + kLineH + kTitleGap, text_w, kLineH},
+                             TextRole::Body, ink);
+        } else {
+            painter.DrawText(toast.text, {text_x, card.y, text_w, card.h}, TextRole::Body, ink);
+        }
         if (scaled) painter.PopTransform();
     }
-    if (alive || sliding) RequestAnimation();
-    if (toasts_.empty()) toast_tick_ = 0.0;
+    // 包围盒外扩 4 DIP：缝隙和边角保持 hover，折叠 ⇄ 展开不会在缝隙上抖。
+    toast_hot_region_ = deck.IsEmpty()
+                            ? Rect{}
+                            : Rect{deck.x - 4.0f, deck.y - 4.0f, deck.w + 8.0f, deck.h + 8.0f};
+    // 静止时帧循环停掉（省电 + 不饿死 WM_TIMER），到期/出生由一次性唤醒定时器驱动；
+    // hover 期间保持帧运行：pause_seconds 依赖帧钟推进，悬停才能持续推迟到期。
+    if (alive || sliding || expanding || hot) {
+        RequestAnimation();
+    } else {
+        toast_tick_ = 0.0;
+    }
+    UpdateToastWake(now);
 }
 
 void WindowImpl::HideTooltip(bool immediate) {
@@ -655,13 +783,13 @@ void WindowImpl::SetTooltipHover(Control* hit, Point p, uint32_t buttons) {
 
 float WindowImpl::TickTooltip(double now) {
     if (tooltip_shown_) {
-        const float a = static_cast<float>(std::clamp((now - tooltip_born_) / 0.12, 0.0, 1.0));
+        const float a = theme_.motion_scale <= 0.001f ? 1.0f : static_cast<float>(std::clamp((now - tooltip_born_) / (theme_.duration_fast * theme_.motion_scale), 0.0, 1.0));
         if (a < 1.0f) RequestAnimation();
         return a;
     }
     if (tooltip_fading_) {
         const float a =
-            1.0f - static_cast<float>(std::clamp((now - tooltip_fade_start_) / 0.10, 0.0, 1.0));
+            theme_.motion_scale <= 0.001f ? 0.0f : 1.0f - static_cast<float>(std::clamp((now - tooltip_fade_start_) / (theme_.duration_fast * theme_.motion_scale), 0.0, 1.0));
         if (a > 0.0f) {
             RequestAnimation();
             return a;
@@ -679,12 +807,15 @@ void WindowImpl::DrawTooltip(Painter& painter, const Theme& theme, const Rect& c
     const double now = clock_seconds();
     if (tooltip_control_ && tooltip_control_ != tooltip_suppressed_ &&
         !tooltip_shown_ && !tooltip_fading_ &&
-        now - tooltip_dwell_start_ >= static_cast<double>(theme.tooltip_delay)) {
+        now - tooltip_dwell_start_ >= static_cast<double>(
+            tooltip_control_->ToolTipDelay() >= 0.0f
+                ? tooltip_control_->ToolTipDelay()
+                : theme.tooltip_delay)) {
         tooltip_shown_ = true;
         tooltip_fading_ = false;
         tooltip_text_ = tooltip_control_->tooltip_;
         tooltip_custom_ = tooltip_control_->tooltip_content_.get();
-        tooltip_anchor_bounds_ = tooltip_control_->AbsoluteBounds();
+        tooltip_anchor_bounds_ = tooltip_control_->ToolTipAnchor();
         tooltip_born_ = now;
     }
     const float alpha = TickTooltip(now);
@@ -879,6 +1010,11 @@ float WindowImpl::AcrylicAmount() const noexcept {
     if (active_dialog_ || active_busy_) return acrylic_tween_.Value();
     if (active_drawer_) return active_drawer_->slide_.Value();
     return 0.0f;
+}
+
+float WindowImpl::AcrylicSigma() const noexcept {
+    // 抽屉是贴边阅读面，模糊减半避免整窗发糊；对话框/忙碌遮罩保持全量景深。
+    return active_drawer_ ? 8.0f : 16.0f;
 }
 
 float WindowImpl::AcrylicDim() const noexcept {

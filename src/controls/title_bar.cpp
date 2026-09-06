@@ -157,10 +157,17 @@ float TitleBar::CaptionStart() const noexcept {
     return kPadX + ((HasIcon() || !glyph_.empty()) ? kGlyphSlot : 0.0f);
 }
 
+float TitleBar::ButtonsWidth() const noexcept {
+    float w = kButtonWidth;  // Close 始终在
+    if (show_max_) w += kButtonWidth;
+    if (show_min_) w += kButtonWidth;
+    return w;
+}
+
 float TitleBar::TitleWidth(float bar_w) const {
     const std::wstring_view text = title_.empty() ? std::wstring_view(L"LUMEN") : title_;
     const float natural = std::max(1.0f, MeasureText(text, TextRole::CaptionStrong).w);
-    const float buttons = kButtonWidth * 3.0f;
+    const float buttons = ButtonsWidth();
     const float hud = status_.empty() ? 0.0f : kHudMin;
     const float leftover = bar_w - CaptionStart() - kTitleGap - hud - buttons - 8.0f;
     if (leftover < 1.0f) return natural;
@@ -175,7 +182,7 @@ TitleBar::TitleBar() {
 
 Size TitleBar::Measure(Size available, const Theme& theme) {
     const float h = kHeight;
-    const float buttons = kButtonWidth * 3.0f;
+    const float buttons = ButtonsWidth();
     const float x = CaptionStart() + TitleWidth(available.w) + kTitleGap;
     const float content_w = std::max(0.0f, available.w - x - buttons - 8.0f);
     if (content_) MeasureChildAt(0, {content_w, h}, theme);
@@ -185,7 +192,7 @@ Size TitleBar::Measure(Size available, const Theme& theme) {
 void TitleBar::Arrange(const Rect& absolute) {
     absolute_ = {absolute.x, absolute.y, absolute.w, kHeight};
     const float h = kHeight;
-    const float buttons = kButtonWidth * 3.0f;
+    const float buttons = ButtonsWidth();
     const float x = CaptionStart() + TitleWidth(absolute.w) + kTitleGap;
     const float content_w = std::max(0.0f, absolute.w - x - buttons - 8.0f);
     if (content_) {
@@ -194,24 +201,38 @@ void TitleBar::Arrange(const Rect& absolute) {
     }
 }
 
-Rect TitleBar::ButtonSlot(int index) const noexcept {
-    const float buttons = kButtonWidth * 3.0f;
-    return {absolute_.w - buttons + static_cast<float>(index) * kButtonWidth, 0.0f, kButtonWidth,
-            kHeight};
+Rect TitleBar::ButtonSlot(Region region) const noexcept {
+    // 从右到左排：Close，可选 Max，可选 Min。
+    float x = absolute_.w - kButtonWidth;
+    if (region == Region::Close) return {x, 0.0f, kButtonWidth, kHeight};
+    if (show_max_) {
+        x -= kButtonWidth;
+        if (region == Region::Max) return {x, 0.0f, kButtonWidth, kHeight};
+    }
+    if (show_min_) {
+        x -= kButtonWidth;
+        if (region == Region::Min) return {x, 0.0f, kButtonWidth, kHeight};
+    }
+    return {};
 }
 
 TitleBar::Region TitleBar::Hit(Point window_dip) const noexcept {
     const Rect bar{absolute_.x, absolute_.y, absolute_.w, kHeight};
     if (!bar.Contains(window_dip)) return Region::Client;
     const float x = window_dip.x - absolute_.x;
-    const float w = absolute_.w;
-    if (x >= w - kButtonWidth) return Region::Close;
-    if (x >= w - 2.0f * kButtonWidth) return Region::Max;
-    if (x >= w - 3.0f * kButtonWidth) return Region::Min;
+    const auto in_slot = [&](Region region) {
+        const Rect slot = ButtonSlot(region);
+        return !slot.IsEmpty() && x >= slot.x && x < slot.x + slot.w;
+    };
+    if (in_slot(Region::Close)) return Region::Close;
+    if (show_max_ && in_slot(Region::Max)) return Region::Max;
+    if (show_min_ && in_slot(Region::Min)) return Region::Min;
     return Region::Caption;
 }
 
 void TitleBar::SetButtonHover(Region region) {
+    if (region == Region::Min && !show_min_) region = Region::Caption;
+    if (region == Region::Max && !show_max_) region = Region::Caption;
     if (hover_ == region) return;
     hover_ = region;
     Animate();
@@ -272,28 +293,32 @@ void TitleBar::Draw(Painter& painter, const Theme& theme) {
                      Align::Leading, title_w);
     x += title_w + kTitleGap;
 
-    const float buttons_w = kButtonWidth * 3.0f;
+    const float buttons_w = ButtonsWidth();
     const float hud_w = std::max(0.0f, bar.Right() - buttons_w - 8.0f - x);
     if (!status_.empty() && hud_w > 24.0f) {
         painter.DrawText(status_, {x, bar.y, hud_w, bar.h}, TextRole::Mono, theme.text_secondary,
                          Align::Leading, hud_w);
     }
 
-    const float hovers[3] = {min_glow_, max_glow_, close_glow_};
-    for (int i = 0; i < 3; ++i) {
-        const Rect slot{bar.x + ButtonSlot(i).x, bar.y, kButtonWidth, kHeight};
-        if (hovers[i] > 0.01f) {
-            painter.FillRect(slot, FadeA(theme.fill_hover, hovers[i]));
+    const auto paint_slot = [&](Region region, float glow) {
+        const Rect local = ButtonSlot(region);
+        if (local.IsEmpty()) return;
+        const Rect slot{bar.x + local.x, bar.y, local.w, local.h};
+        if (glow > 0.01f) {
+            painter.FillRect(slot, FadeA(theme.fill_hover, glow));
         }
-        if (i == 1) {
-            const Color punch = hovers[i] > 0.01f ? FadeA(theme.fill_hover, hovers[i]) : theme.bg;
+        if (region == Region::Max) {
+            const Color punch = glow > 0.01f ? FadeA(theme.fill_hover, glow) : theme.bg;
             DrawCaptionSquare(painter, slot, theme.text, maximized_, punch);
-        } else if (i == 0) {
+        } else if (region == Region::Min) {
             painter.DrawIcon(icon::kMinimize, slot, 16.0f, theme.text);
-        } else {
+        } else if (region == Region::Close) {
             painter.DrawIcon(icon::kClose, slot, 16.0f, theme.text);
         }
-    }
+    };
+    if (show_min_) paint_slot(Region::Min, min_glow_);
+    if (show_max_) paint_slot(Region::Max, max_glow_);
+    paint_slot(Region::Close, close_glow_);
 }
 
 } // namespace lumen

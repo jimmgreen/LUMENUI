@@ -1,5 +1,7 @@
 // uia.cpp — 窗口级 UI Automation 提供程序。COM 类型不出公共头；模式派发走 Control 虚函数。
 #include "window_impl.h"
+#include "log.h"
+#include <memory>
 #include "lumen/Panel.h"
 #include "lumen/TitleBar.h"
 #include <UIAutomation.h>
@@ -55,8 +57,8 @@ void SetI4(VARIANT* v, LONG value) {
     v->lVal = value;
 }
 
-SAFEARRAY* RuntimeId(uintptr_t a, uintptr_t b, int extra = -1) {
-    const ULONG n = extra >= 0 ? 4u : 3u;
+SAFEARRAY* RuntimeId(uintptr_t a, uintptr_t b, int extra = -1, int column = -1) {
+    const ULONG n = column >= 0 ? 5u : extra >= 0 ? 4u : 3u;
     SAFEARRAY* sa = SafeArrayCreateVector(VT_I4, 0, n);
     if (!sa) return nullptr;
     LONG* data = nullptr;
@@ -68,12 +70,33 @@ SAFEARRAY* RuntimeId(uintptr_t a, uintptr_t b, int extra = -1) {
     data[1] = static_cast<LONG>(a >> 32);
     data[2] = static_cast<LONG>(a);
     if (extra >= 0) data[3] = extra + 1;
+    if (column >= 0) data[4] = column + 1;
     (void)b;
     SafeArrayUnaccessData(sa);
     return sa;
 }
 
 } // namespace
+
+struct UiaNode;
+struct UiaLink {
+    WindowImpl* impl = nullptr;
+    Control* control = nullptr;
+    UiaNode* head = nullptr; // 非拥有链，只用于断开包含 Ghost 在内的全部 provider。
+    IRawElementProviderFragmentRoot* root_provider = nullptr;
+    UiaLink(WindowImpl* window, Control* target,
+            IRawElementProviderFragmentRoot* identity = nullptr)
+        : impl(window), control(target), root_provider(identity) {
+        if (root_provider) root_provider->AddRef();
+    }
+    ~UiaLink() { if (root_provider) root_provider->Release(); }
+    UiaLink(const UiaLink&) = delete;
+    UiaLink& operator=(const UiaLink&) = delete;
+};
+namespace {
+std::atomic<unsigned> g_live_providers{0};
+UiaNode* g_pending_disconnect = nullptr;
+}
 
 struct UiaState {
     WindowImpl* impl = nullptr;
@@ -90,23 +113,58 @@ struct UiaNode final : IRawElementProviderSimple,
                        IRangeValueProvider,
                        IExpandCollapseProvider,
                        ISelectionProvider,
-                       ISelectionItemProvider {
-    WindowImpl* impl = nullptr;
-    Control* control = nullptr;
+                       ISelectionItemProvider,
+                       IGridProvider,
+                       IGridItemProvider {
+    std::shared_ptr<UiaLink> link;
+    UiaNode* link_next = nullptr;
+    UiaNode* link_prev = nullptr;
+    UiaNode* pending_next = nullptr;
+    bool pending = false;
+    bool root = false;
+    uint32_t patterns = 0;
+    uintptr_t runtime_key = 0;
+    IRawElementProviderSimple* host_provider = nullptr;
+    HRESULT host_status = S_OK;
     int item_index = -1;
+    int item_column = -1;
+    UiaNode(std::shared_ptr<UiaLink> value, bool is_root, int index = -1)
+        : link(std::move(value)), root(is_root), item_index(index) {
+        patterns = link->control ? link->control->AutomationPatterns() : 0;
+        runtime_key = root ? 1 : reinterpret_cast<uintptr_t>(link->control);
+        link_next = link->head;
+        if (link_next) link_next->link_prev = this;
+        link->head = this;
+        g_live_providers.fetch_add(1);
+    }
+    ~UiaNode() {
+        if (host_provider) host_provider->Release();
+        if (link_prev) link_prev->link_next = link_next;
+        else link->head = link_next;
+        if (link_next) link_next->link_prev = link_prev;
+        g_live_providers.fetch_sub(1);
+    }
+    WindowImpl* Impl() const noexcept { return link->impl; }
+    Control* Target() const noexcept { return link->control; }
+    bool Available() const noexcept {
+        return Impl() && (root || Target()) && (!IsGhost() ||
+            (item_index < Target()->AutomationItemCount() &&
+             (!IsCell() || item_column < Target()->AutomationColumnCount())));
+    }
     std::atomic<ULONG> refs{1};
 
-    bool IsRoot() const noexcept { return control == nullptr && item_index < 0; }
+    bool IsRoot() const noexcept { return root; }
     bool IsGhost() const noexcept { return item_index >= 0; }
+    bool IsCell() const noexcept { return item_column >= 0; }
     uint32_t Patterns() const noexcept {
-        return control ? control->AutomationPatterns() : 0;
+        return patterns;
     }
 
     ULONG STDMETHODCALLTYPE AddRef() override { return refs.fetch_add(1, std::memory_order_relaxed) + 1; }
     ULONG STDMETHODCALLTYPE Release() override {
         const ULONG n = refs.fetch_sub(1, std::memory_order_acq_rel) - 1;
-        // 树节点由 UiaState 持有；幽灵项不进 map，归零即释放。
-        if (n == 0 && IsGhost()) delete this;
+        // state 与外部 COM 客户端各自释放自己的引用。
+        if (n == 0) delete this;
         return n;
     }
 
@@ -123,7 +181,7 @@ struct UiaNode final : IRawElementProviderSimple,
             *ppv = static_cast<IInvokeProvider*>(this);
         } else if (riid == IID_IToggleProvider && (Patterns() & kPatternToggle) && !IsGhost()) {
             *ppv = static_cast<IToggleProvider*>(this);
-        } else if (riid == IID_IValueProvider && (Patterns() & kPatternValue) && !IsGhost()) {
+        } else if (riid == IID_IValueProvider && (IsCell() || ((Patterns() & kPatternValue) && !IsGhost()))) {
             *ppv = static_cast<IValueProvider*>(this);
         } else if (riid == IID_IRangeValueProvider && (Patterns() & kPatternRange) && !IsGhost()) {
             *ppv = static_cast<IRangeValueProvider*>(this);
@@ -131,6 +189,10 @@ struct UiaNode final : IRawElementProviderSimple,
             *ppv = static_cast<IExpandCollapseProvider*>(this);
         } else if (riid == IID_ISelectionProvider && (Patterns() & kPatternSelection) && !IsGhost()) {
             *ppv = static_cast<ISelectionProvider*>(this);
+        } else if (riid == IID_IGridProvider && (Patterns() & kPatternGrid) && !IsGhost()) {
+            *ppv = static_cast<IGridProvider*>(this);
+        } else if (riid == IID_IGridItemProvider && IsCell()) {
+            *ppv = static_cast<IGridItemProvider*>(this);
         } else if (riid == IID_ISelectionItemProvider &&
                    (IsGhost() || (Patterns() & kPatternSelectionItem))) {
             *ppv = static_cast<ISelectionItemProvider*>(this);
@@ -151,12 +213,17 @@ struct UiaNode final : IRawElementProviderSimple,
     HRESULT STDMETHODCALLTYPE GetPatternProvider(PATTERNID id, IUnknown** ret) override {
         if (!ret) return E_POINTER;
         *ret = nullptr;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         IUnknown* p = nullptr;
         if (IsGhost()) {
             if (id == UIA_SelectionItemPatternId) p = static_cast<ISelectionItemProvider*>(this);
+            else if (IsCell() && id == UIA_GridItemPatternId) p = static_cast<IGridItemProvider*>(this);
+            else if (IsCell() && id == UIA_ValuePatternId) p = static_cast<IValueProvider*>(this);
         } else {
             const uint32_t pat = Patterns();
-            if (id == UIA_InvokePatternId && (pat & kPatternInvoke)) {
+            if (id == UIA_GridPatternId && (pat & kPatternGrid)) {
+                p = static_cast<IGridProvider*>(this);
+            } else if (id == UIA_InvokePatternId && (pat & kPatternInvoke)) {
                 p = static_cast<IInvokeProvider*>(this);
             } else if (id == UIA_TogglePatternId && (pat & kPatternToggle)) {
                 p = static_cast<IToggleProvider*>(this);
@@ -182,16 +249,16 @@ struct UiaNode final : IRawElementProviderSimple,
     HRESULT STDMETHODCALLTYPE GetPropertyValue(PROPERTYID id, VARIANT* ret) override;
     HRESULT STDMETHODCALLTYPE get_HostRawElementProvider(IRawElementProviderSimple** ret) override {
         if (!ret) return E_POINTER;
-        *ret = nullptr;
-        if (!IsRoot() || !impl || !impl->hwnd_) return S_OK;
-        return UiaHostProviderFromHwnd(impl->hwnd_, ret);
+        *ret = host_provider;
+        if (*ret) (*ret)->AddRef();
+        return host_status;
     }
 
     HRESULT STDMETHODCALLTYPE Navigate(NavigateDirection dir, IRawElementProviderFragment** ret) override;
     HRESULT STDMETHODCALLTYPE GetRuntimeId(SAFEARRAY** ret) override {
         if (!ret) return E_POINTER;
-        const uintptr_t key = IsRoot() ? 1 : reinterpret_cast<uintptr_t>(control);
-        *ret = RuntimeId(key, 0, IsGhost() ? item_index : -1);
+        const uintptr_t key = runtime_key;
+        *ret = RuntimeId(key, 0, IsGhost() ? item_index : -1, item_column);
         return *ret ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE get_BoundingRectangle(UiaRect* ret) override;
@@ -201,8 +268,9 @@ struct UiaNode final : IRawElementProviderSimple,
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE SetFocus() override {
-        if (IsGhost() || !impl) return S_OK;
-        if (control && impl->UiaFocusable(control)) impl->SetFocusControl(control);
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (IsGhost() || !Impl()) return S_OK;
+        if (Target() && Impl()->UiaFocusable(Target())) Impl()->SetFocusControl(Target());
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_FragmentRoot(IRawElementProviderFragmentRoot** ret) override;
@@ -212,84 +280,115 @@ struct UiaNode final : IRawElementProviderSimple,
     HRESULT STDMETHODCALLTYPE GetFocus(IRawElementProviderFragment** ret) override;
 
     HRESULT STDMETHODCALLTYPE Invoke() override {
-        if (!control || IsGhost()) return UIA_E_INVALIDOPERATION;
-        if (!control->Enabled()) return UIA_E_ELEMENTNOTENABLED;
-        return control->AutomationInvoke() ? S_OK : UIA_E_INVALIDOPERATION;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
+        if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
+        return Target()->AutomationInvoke() ? S_OK : UIA_E_INVALIDOPERATION;
     }
 
     HRESULT STDMETHODCALLTYPE Toggle() override {
-        if (!control || IsGhost()) return UIA_E_INVALIDOPERATION;
-        if (!control->Enabled()) return UIA_E_ELEMENTNOTENABLED;
-        return control->AutomationToggle() ? S_OK : UIA_E_INVALIDOPERATION;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
+        if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
+        return Target()->AutomationToggle() ? S_OK : UIA_E_INVALIDOPERATION;
     }
     HRESULT STDMETHODCALLTYPE get_ToggleState(ToggleState* ret) override {
         if (!ret) return E_POINTER;
-        const int s = control ? control->AutomationToggleState() : -1;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        const int s = Target() ? Target()->AutomationToggleState() : -1;
         *ret = s == 1 ? ToggleState_On : (s == 2 ? ToggleState_Indeterminate : ToggleState_Off);
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE SetValue(LPCWSTR value) override {
-        if (!control || IsGhost()) return UIA_E_INVALIDOPERATION;
-        if (!control->Enabled() || control->AutomationIsReadOnly()) return UIA_E_ELEMENTNOTENABLED;
-        return control->AutomationSetValue(value ? value : L"") ? S_OK : E_INVALIDARG;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (IsCell()) {
+            if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
+            if (Target()->AutomationCellReadOnly(item_index, item_column)) return UIA_E_INVALIDOPERATION;
+            return Target()->AutomationSetCellValue(item_index, item_column, value ? value : L"") ? S_OK : E_INVALIDARG;
+        }
+        if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
+        if (!Target()->Enabled() || Target()->AutomationIsReadOnly()) return UIA_E_ELEMENTNOTENABLED;
+        return Target()->AutomationSetValue(value ? value : L"") ? S_OK : E_INVALIDARG;
     }
     HRESULT STDMETHODCALLTYPE get_Value(BSTR* ret) override {
         if (!ret) return E_POINTER;
-        const std::wstring text = control ? control->AutomationValue() : std::wstring{};
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        const std::wstring text = IsCell() ? Target()->AutomationCellValue(item_index, item_column) :
+            Target() ? Target()->AutomationValue() : std::wstring{};
         *ret = SysAllocStringLen(text.c_str(), static_cast<UINT>(text.size()));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_IsReadOnly(BOOL* ret) override {
         if (!ret) return E_POINTER;
-        *ret = (!control || control->AutomationIsReadOnly()) ? TRUE : FALSE;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = (IsCell() ? Target()->AutomationCellReadOnly(item_index, item_column) :
+            !Target() || Target()->AutomationIsReadOnly()) ? TRUE : FALSE;
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE SetValue(double value) override {
-        if (!control || IsGhost()) return UIA_E_INVALIDOPERATION;
-        if (!control->Enabled() || control->AutomationIsReadOnly()) return UIA_E_ELEMENTNOTENABLED;
-        return control->AutomationSetRange(value) ? S_OK : E_INVALIDARG;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
+        if (!Target()->Enabled() || Target()->AutomationIsReadOnly()) return UIA_E_ELEMENTNOTENABLED;
+        return Target()->AutomationSetRange(value) ? S_OK : E_INVALIDARG;
     }
     HRESULT STDMETHODCALLTYPE get_Value(double* ret) override {
         if (!ret) return E_POINTER;
-        *ret = control ? control->AutomationRangeValue() : 0.0;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationRangeValue() : 0.0;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Maximum(double* ret) override {
         if (!ret) return E_POINTER;
-        *ret = control ? control->AutomationRangeMax() : 0.0;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationRangeMax() : 0.0;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_Minimum(double* ret) override {
         if (!ret) return E_POINTER;
-        *ret = control ? control->AutomationRangeMin() : 0.0;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationRangeMin() : 0.0;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_LargeChange(double* ret) override {
         if (!ret) return E_POINTER;
-        *ret = control ? control->AutomationRangeLarge() : 10.0;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationRangeLarge() : 10.0;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_SmallChange(double* ret) override {
         if (!ret) return E_POINTER;
-        *ret = control ? control->AutomationRangeSmall() : 1.0;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationRangeSmall() : 1.0;
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE Expand() override {
-        if (!control || IsGhost()) return UIA_E_INVALIDOPERATION;
-        if (!control->Enabled()) return UIA_E_ELEMENTNOTENABLED;
-        return control->AutomationExpand() ? S_OK : UIA_E_INVALIDOPERATION;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
+        if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
+        return Target()->AutomationExpand() ? S_OK : UIA_E_INVALIDOPERATION;
     }
     HRESULT STDMETHODCALLTYPE Collapse() override {
-        if (!control || IsGhost()) return UIA_E_INVALIDOPERATION;
-        if (!control->Enabled()) return UIA_E_ELEMENTNOTENABLED;
-        return control->AutomationCollapse() ? S_OK : UIA_E_INVALIDOPERATION;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (!Target() || IsGhost()) return UIA_E_INVALIDOPERATION;
+        if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
+        return Target()->AutomationCollapse() ? S_OK : UIA_E_INVALIDOPERATION;
     }
     HRESULT STDMETHODCALLTYPE get_ExpandCollapseState(ExpandCollapseState* ret) override {
         if (!ret) return E_POINTER;
-        const int s = control ? control->AutomationExpandState() : -1;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        const int s = Target() ? Target()->AutomationExpandState() : -1;
         *ret = s == 1 ? ExpandCollapseState_Expanded
                       : (s == 0 ? ExpandCollapseState_Collapsed : ExpandCollapseState_LeafNode);
         return S_OK;
@@ -298,20 +397,65 @@ struct UiaNode final : IRawElementProviderSimple,
     HRESULT STDMETHODCALLTYPE GetSelection(SAFEARRAY** ret) override;
     HRESULT STDMETHODCALLTYPE get_CanSelectMultiple(BOOL* ret) override {
         if (!ret) return E_POINTER;
-        *ret = (control && control->AutomationCanSelectMultiple()) ? TRUE : FALSE;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = (Target() && Target()->AutomationCanSelectMultiple()) ? TRUE : FALSE;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_IsSelectionRequired(BOOL* ret) override {
         if (!ret) return E_POINTER;
+        *ret = {};
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
         *ret = FALSE;
         return S_OK;
     }
 
     HRESULT STDMETHODCALLTYPE Select() override;
-    HRESULT STDMETHODCALLTYPE AddToSelection() override { return Select(); }
-    HRESULT STDMETHODCALLTYPE RemoveFromSelection() override { return UIA_E_INVALIDOPERATION; }
+    HRESULT STDMETHODCALLTYPE AddToSelection() override {
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE; return Select(); }
+    HRESULT STDMETHODCALLTYPE RemoveFromSelection() override {
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE; return UIA_E_INVALIDOPERATION; }
     HRESULT STDMETHODCALLTYPE get_IsSelected(BOOL* ret) override;
     HRESULT STDMETHODCALLTYPE get_SelectionContainer(IRawElementProviderSimple** ret) override;
+    HRESULT STDMETHODCALLTYPE GetItem(int row, int column, IRawElementProviderSimple** ret) override {
+        if (!ret) return E_POINTER;
+        *ret = nullptr;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (!Target() || IsGhost() || row < 0 || column < 0 ||
+            row >= Target()->AutomationItemCount() || column >= Target()->AutomationColumnCount()) return E_INVALIDARG;
+        auto* cell = GhostOf(Impl(), Target(), row);
+        cell->item_column = column;
+        *ret = cell;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_RowCount(int* ret) override {
+        if (!ret) return E_POINTER;
+        *ret = 0;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationItemCount() : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ColumnCount(int* ret) override {
+        if (!ret) return E_POINTER;
+        *ret = 0;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = Target() ? Target()->AutomationColumnCount() : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_Row(int* ret) override { return CellCoordinate(ret, item_index); }
+    HRESULT STDMETHODCALLTYPE get_Column(int* ret) override { return CellCoordinate(ret, item_column); }
+    HRESULT STDMETHODCALLTYPE get_RowSpan(int* ret) override { return CellCoordinate(ret, 1); }
+    HRESULT STDMETHODCALLTYPE get_ColumnSpan(int* ret) override { return CellCoordinate(ret, 1); }
+    HRESULT CellCoordinate(int* ret, int value) {
+        if (!ret) return E_POINTER;
+        *ret = 0;
+        if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+        *ret = value;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_ContainingGrid(IRawElementProviderSimple** ret) override {
+        return get_SelectionContainer(ret);
+    }
     static UiaState* StateOf(WindowImpl* w);
     static UiaNode* RootOf(WindowImpl* w);
     static UiaNode* NodeFor(WindowImpl* w, Control* c);
@@ -331,31 +475,30 @@ UiaState* UiaNode::StateOf(WindowImpl* w) {
 
 UiaNode* UiaNode::RootOf(WindowImpl* w) {
     UiaState* state = StateOf(w);
-    if (!state->root) {
-        state->root = new UiaNode;
-        state->root->impl = w;
-    }
-    return state->root;
+    if (state->root) return state->root;
+    auto* node = new UiaNode(std::make_shared<UiaLink>(w, nullptr), true);
+    node->host_status = E_PENDING;
+    state->root = node; // 先发布根，系统 provider 查询可能引发 COM 重入。
+    // 断开时 HWND 已可能销毁，只缓存系统身份，不再访问窗口。
+    node->host_status = UiaHostProviderFromHwnd(w->hwnd_, &node->host_provider);
+    if (FAILED(node->host_status))
+        Log(LogLevel::Warn, L"UiaHostProviderFromHwnd failed: 0x%08lx",
+            static_cast<unsigned long>(node->host_status));
+    return node;
 }
 
 UiaNode* UiaNode::NodeFor(WindowImpl* w, Control* c) {
     if (!c) return RootOf(w);
-    UiaState* state = StateOf(w);
-    UiaNode*& slot = state->nodes[c];
-    if (!slot) {
-        slot = new UiaNode;
-        slot->impl = w;
-        slot->control = c;
-    }
-    return slot;
+    auto& nodes = StateOf(w)->nodes;
+    if (const auto found = nodes.find(c); found != nodes.end()) return found->second;
+    auto node = std::make_unique<UiaNode>(std::make_shared<UiaLink>(w, c, RootOf(w)), false);
+    const auto [slot, inserted] = nodes.emplace(c, node.get());
+    if (inserted) return node.release();
+    return slot->second;
 }
 
 UiaNode* UiaNode::GhostOf(WindowImpl* w, Control* host, int index) {
-    auto* node = new UiaNode;
-    node->impl = w;
-    node->control = host;
-    node->item_index = index;
-    return node;
+    return new UiaNode(NodeFor(w, host)->link, false, index);
 }
 
 void UiaNode::CollectRootChildren(WindowImpl* w, std::vector<Control*>& out) {
@@ -385,32 +528,59 @@ void UiaNode::CollectChildren(WindowImpl* w, Control* c, std::vector<Control*>& 
 HRESULT UiaNode::GetPropertyValue(PROPERTYID id, VARIANT* ret) {
     if (!ret) return E_POINTER;
     VariantInit(ret);
-    const bool enabled = !control || control->Enabled();
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    const bool enabled = !Target() || Target()->Enabled();
+    if (id == UIA_ValueValuePropertyId && Target()) {
+        SetBstr(ret, IsCell() ? Target()->AutomationCellValue(item_index, item_column) : Target()->AutomationValue());
+        return S_OK;
+    }
+    if (id == UIA_ValueIsReadOnlyPropertyId && Target()) {
+        SetBool(ret, IsCell() ? Target()->AutomationCellReadOnly(item_index, item_column) : Target()->AutomationIsReadOnly());
+        return S_OK;
+    }
+    if (id == UIA_GridRowCountPropertyId && Target()) { SetI4(ret, Target()->AutomationItemCount()); return S_OK; }
+    if (id == UIA_GridColumnCountPropertyId && Target()) { SetI4(ret, Target()->AutomationColumnCount()); return S_OK; }
+    if (IsCell()) {
+        if (id == UIA_GridItemRowPropertyId) { SetI4(ret, item_index); return S_OK; }
+        if (id == UIA_GridItemColumnPropertyId) { SetI4(ret, item_column); return S_OK; }
+        if (id == UIA_GridItemRowSpanPropertyId || id == UIA_GridItemColumnSpanPropertyId) { SetI4(ret, 1); return S_OK; }
+    }
     if (id == UIA_NamePropertyId) {
         std::wstring name;
-        if (IsGhost() && control) name = control->AutomationItemName(item_index);
-        else if (control) name = control->AutomationName();
-        else if (impl) name = impl->title_;
+        if (IsCell()) name = Target()->AutomationCellName(item_index, item_column);
+        else if (IsGhost() && Target()) name = Target()->AutomationItemName(item_index);
+        else if (Target()) name = Target()->AutomationName();
+        else if (Impl()) name = Impl()->title_;
         SetBstr(ret, name);
         return S_OK;
     }
     if (id == UIA_ControlTypePropertyId) {
+        if (IsCell()) { SetI4(ret, UIA_DataItemControlTypeId); return S_OK; }
         AutomationControlType type = AutomationControlType::Window;
         if (IsGhost()) type = AutomationControlType::List;
-        else if (control) type = control->AutomationType();
+        else if (Target()) type = Target()->AutomationType();
         SetI4(ret, ControlTypeId(type));
+        return S_OK;
+    }
+    if (id == UIA_HelpTextPropertyId) {
+        if (Target()) SetBstr(ret, Target()->AccessibleHelp());
         return S_OK;
     }
     if (id == UIA_IsEnabledPropertyId) {
         SetBool(ret, enabled);
         return S_OK;
     }
+    if (id == UIA_IsOffscreenPropertyId && IsCell()) {
+        const Rect bounds = Target()->AutomationCellBounds(item_index, item_column);
+        SetBool(ret, !Target()->Visible() || bounds.w <= 0.0f || bounds.h <= 0.0f);
+        return S_OK;
+    }
     if (id == UIA_IsKeyboardFocusablePropertyId) {
-        SetBool(ret, !IsGhost() && impl && impl->UiaFocusable(control));
+        SetBool(ret, !IsGhost() && Impl() && Impl()->UiaFocusable(Target()));
         return S_OK;
     }
     if (id == UIA_HasKeyboardFocusPropertyId) {
-        SetBool(ret, !IsGhost() && control && impl && impl->focused_ == control);
+        SetBool(ret, !IsGhost() && Target() && Impl() && Impl()->focused_ == Target());
         return S_OK;
     }
     if (id == UIA_IsControlElementPropertyId || id == UIA_IsContentElementPropertyId) {
@@ -418,19 +588,19 @@ HRESULT UiaNode::GetPropertyValue(PROPERTYID id, VARIANT* ret) {
         return S_OK;
     }
     if (id == UIA_IsPasswordPropertyId) {
-        SetBool(ret, control && !IsGhost() && control->AutomationIsPassword());
+        SetBool(ret, Target() && !IsGhost() && Target()->AutomationIsPassword());
         return S_OK;
     }
     if (id == UIA_LiveSettingPropertyId) {
-        SetI4(ret, control && !IsGhost() ? control->AutomationLiveSetting() : 0);
+        SetI4(ret, Target() && !IsGhost() ? Target()->AutomationLiveSetting() : 0);
         return S_OK;
     }
     if (id == UIA_FrameworkIdPropertyId) {
         SetBstr(ret, L"LUMEN");
         return S_OK;
     }
-    if (id == UIA_NativeWindowHandlePropertyId && IsRoot() && impl && impl->hwnd_) {
-        SetI4(ret, static_cast<LONG>(reinterpret_cast<uintptr_t>(impl->hwnd_)));
+    if (id == UIA_NativeWindowHandlePropertyId && IsRoot() && Impl() && Impl()->hwnd_) {
+        SetI4(ret, static_cast<LONG>(reinterpret_cast<uintptr_t>(Impl()->hwnd_)));
         return S_OK;
     }
     return S_OK;
@@ -439,22 +609,23 @@ HRESULT UiaNode::GetPropertyValue(PROPERTYID id, VARIANT* ret) {
 HRESULT UiaNode::get_BoundingRectangle(UiaRect* ret) {
     if (!ret) return E_POINTER;
     *ret = {};
-    if (!impl || !impl->hwnd_) return S_OK;
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Impl() || !Impl()->hwnd_) return S_OK;
     RECT client{};
-    GetClientRect(impl->hwnd_, &client);
+    GetClientRect(Impl()->hwnd_, &client);
     POINT origin{0, 0};
-    ClientToScreen(impl->hwnd_, &origin);
-    const float scale = impl->scale_ > 0.0f ? impl->scale_ : 1.0f;
-    if (IsRoot() || IsGhost() || !control) {
+    ClientToScreen(Impl()->hwnd_, &origin);
+    const float scale = Impl()->scale_ > 0.0f ? Impl()->scale_ : 1.0f;
+    if (IsRoot() || (IsGhost() && !IsCell()) || !Target()) {
         ret->left = origin.x;
         ret->top = origin.y;
         ret->width = client.right;
         ret->height = client.bottom;
         return S_OK;
     }
-    const Rect& r = control->AbsoluteBounds();
+    const Rect r = IsCell() ? Target()->AutomationCellBounds(item_index, item_column) : Target()->AbsoluteBounds();
     POINT tl{static_cast<LONG>(r.x * scale), static_cast<LONG>(r.y * scale)};
-    ClientToScreen(impl->hwnd_, &tl);
+    ClientToScreen(Impl()->hwnd_, &tl);
     ret->left = tl.x;
     ret->top = tl.y;
     ret->width = r.w * scale;
@@ -464,52 +635,72 @@ HRESULT UiaNode::get_BoundingRectangle(UiaRect* ret) {
 
 HRESULT UiaNode::get_FragmentRoot(IRawElementProviderFragmentRoot** ret) {
     if (!ret) return E_POINTER;
-    if (!impl) {
-        *ret = nullptr;
-        return S_OK;
-    }
-    UiaNode* root = RootOf(impl);
-    root->AddRef();
-    *ret = static_cast<IRawElementProviderFragmentRoot*>(root);
+    // UIA 断开需要根身份；业务失效不影响身份，也不再触及 impl/control。
+    *ret = IsRoot() ? static_cast<IRawElementProviderFragmentRoot*>(this)
+                    : link->root_provider;
+    if (*ret) (*ret)->AddRef();
     return S_OK;
 }
 
 HRESULT UiaNode::Navigate(NavigateDirection dir, IRawElementProviderFragment** ret) {
     if (!ret) return E_POINTER;
     *ret = nullptr;
-    if (!impl) return S_OK;
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Impl()) return S_OK;
     if (IsGhost()) {
-        if (dir == NavigateDirection_Parent && control) {
-            UiaNode* parent = NodeFor(impl, control);
+        if (dir == NavigateDirection_Parent && Target()) {
+            UiaNode* parent = NodeFor(Impl(), Target());
             parent->AddRef();
             *ret = parent;
+        }
+        if (IsCell() && (dir == NavigateDirection_NextSibling || dir == NavigateDirection_PreviousSibling)) {
+            int column = item_column + (dir == NavigateDirection_NextSibling ? 1 : -1);
+            int row = item_index;
+            const int columns = Target()->AutomationColumnCount();
+            if (column >= columns) { column = 0; ++row; }
+            if (column < 0) { column = columns - 1; --row; }
+            if (row >= 0 && row < Target()->AutomationItemCount()) {
+                auto* cell = GhostOf(Impl(), Target(), row);
+                cell->item_column = column;
+                *ret = cell;
+            }
+        }
+        return S_OK;
+    }
+    if (Target() && (Patterns() & kPatternGrid) &&
+        (dir == NavigateDirection_FirstChild || dir == NavigateDirection_LastChild)) {
+        const int rows = Target()->AutomationItemCount(), columns = Target()->AutomationColumnCount();
+        if (rows > 0 && columns > 0) {
+            auto* cell = GhostOf(Impl(), Target(), dir == NavigateDirection_FirstChild ? 0 : rows - 1);
+            cell->item_column = dir == NavigateDirection_FirstChild ? 0 : columns - 1;
+            *ret = cell;
         }
         return S_OK;
     }
     std::vector<Control*> siblings;
-    Control* parent = impl->UiaParentOf(control);
-    if (control) CollectChildren(impl, parent, siblings);
-    else CollectRootChildren(impl, siblings);
+    Control* parent = Impl()->UiaParentOf(Target());
+    if (Target()) CollectChildren(Impl(), parent, siblings);
+    else CollectRootChildren(Impl(), siblings);
 
     auto wrap = [&](Control* c) {
         if (!c) return;
-        UiaNode* node = NodeFor(impl, c);
+        UiaNode* node = NodeFor(Impl(), c);
         node->AddRef();
         *ret = node;
     };
 
     if (dir == NavigateDirection_Parent) {
-        if (!control) return S_OK;
+        if (!Target()) return S_OK;
         if (parent) wrap(parent);
         else {
-            UiaNode* root = RootOf(impl);
-            root->AddRef();
-            *ret = root;
+            UiaNode* root_node = RootOf(Impl());
+            root_node->AddRef();
+            *ret = root_node;
         }
         return S_OK;
     }
     std::vector<Control*> kids;
-    CollectChildren(impl, control, kids);
+    CollectChildren(Impl(), Target(), kids);
     if (dir == NavigateDirection_FirstChild) {
         if (!kids.empty()) wrap(kids.front());
         return S_OK;
@@ -518,10 +709,10 @@ HRESULT UiaNode::Navigate(NavigateDirection dir, IRawElementProviderFragment** r
         if (!kids.empty()) wrap(kids.back());
         return S_OK;
     }
-    if (!control) return S_OK;
+    if (!Target()) return S_OK;
     ptrdiff_t at = -1;
     for (size_t i = 0; i < siblings.size(); ++i) {
-        if (siblings[i] == control) {
+        if (siblings[i] == Target()) {
             at = static_cast<ptrdiff_t>(i);
             break;
         }
@@ -538,14 +729,15 @@ HRESULT UiaNode::Navigate(NavigateDirection dir, IRawElementProviderFragment** r
 HRESULT UiaNode::ElementProviderFromPoint(double x, double y, IRawElementProviderFragment** ret) {
     if (!ret) return E_POINTER;
     *ret = nullptr;
-    if (!impl || !impl->hwnd_) return S_OK;
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Impl() || !Impl()->hwnd_) return S_OK;
     POINT screen{static_cast<LONG>(x), static_cast<LONG>(y)};
     POINT client = screen;
-    ScreenToClient(impl->hwnd_, &client);
-    const float scale = impl->scale_ > 0.0f ? impl->scale_ : 1.0f;
-    Control* hit = impl->HitTest({static_cast<float>(client.x) / scale,
+    ScreenToClient(Impl()->hwnd_, &client);
+    const float scale = Impl()->scale_ > 0.0f ? Impl()->scale_ : 1.0f;
+    Control* hit = Impl()->HitTest({static_cast<float>(client.x) / scale,
                                   static_cast<float>(client.y) / scale});
-    UiaNode* node = hit ? NodeFor(impl, hit) : RootOf(impl);
+    UiaNode* node = hit ? NodeFor(Impl(), hit) : RootOf(Impl());
     node->AddRef();
     *ret = node;
     return S_OK;
@@ -554,8 +746,9 @@ HRESULT UiaNode::ElementProviderFromPoint(double x, double y, IRawElementProvide
 HRESULT UiaNode::GetFocus(IRawElementProviderFragment** ret) {
     if (!ret) return E_POINTER;
     *ret = nullptr;
-    if (!impl) return S_OK;
-    UiaNode* node = impl->focused_ ? NodeFor(impl, impl->focused_) : RootOf(impl);
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Impl()) return S_OK;
+    UiaNode* node = Impl()->focused_ ? NodeFor(Impl(), Impl()->focused_) : RootOf(Impl());
     node->AddRef();
     *ret = node;
     return S_OK;
@@ -564,13 +757,14 @@ HRESULT UiaNode::GetFocus(IRawElementProviderFragment** ret) {
 HRESULT UiaNode::GetSelection(SAFEARRAY** ret) {
     if (!ret) return E_POINTER;
     *ret = nullptr;
-    if (!control || IsGhost()) return S_OK;
-    const int index = control->AutomationSelectedIndex();
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Target() || IsGhost()) return S_OK;
+    const int index = Target()->AutomationSelectedIndex();
     if (index < 0) {
         *ret = SafeArrayCreateVector(VT_UNKNOWN, 0, 0);
         return *ret ? S_OK : E_OUTOFMEMORY;
     }
-    UiaNode* item = GhostOf(impl, control, index);
+    UiaNode* item = GhostOf(Impl(), Target(), index);
     SAFEARRAY* sa = SafeArrayCreateVector(VT_UNKNOWN, 0, 1);
     if (!sa) {
         item->Release();
@@ -589,26 +783,29 @@ HRESULT UiaNode::GetSelection(SAFEARRAY** ret) {
 }
 
 HRESULT UiaNode::Select() {
-    if (!control) return UIA_E_INVALIDOPERATION;
-    if (!control->Enabled()) return UIA_E_ELEMENTNOTENABLED;
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Target()) return UIA_E_INVALIDOPERATION;
+    if (!Target()->Enabled()) return UIA_E_ELEMENTNOTENABLED;
     if (IsGhost()) {
-        return control->AutomationSelectIndex(item_index) ? S_OK : E_INVALIDARG;
+        return Target()->AutomationSelectIndex(item_index) ? S_OK : E_INVALIDARG;
     }
     if (Patterns() & kPatternSelectionItem) {
-        if (control->AutomationToggleState() == 1) return S_OK;
-        return control->AutomationToggle() ? S_OK : UIA_E_INVALIDOPERATION;
+        if (Target()->AutomationToggleState() == 1) return S_OK;
+        return Target()->AutomationToggle() ? S_OK : UIA_E_INVALIDOPERATION;
     }
     return UIA_E_INVALIDOPERATION;
 }
 
 HRESULT UiaNode::get_IsSelected(BOOL* ret) {
     if (!ret) return E_POINTER;
+    *ret = {};
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
     *ret = FALSE;
-    if (!control) return S_OK;
+    if (!Target()) return S_OK;
     if (IsGhost()) {
-        *ret = control->AutomationSelectedIndex() == item_index ? TRUE : FALSE;
+        *ret = Target()->AutomationSelectedIndex() == item_index ? TRUE : FALSE;
     } else {
-        *ret = control->AutomationToggleState() == 1 ? TRUE : FALSE;
+        *ret = Target()->AutomationToggleState() == 1 ? TRUE : FALSE;
     }
     return S_OK;
 }
@@ -616,15 +813,17 @@ HRESULT UiaNode::get_IsSelected(BOOL* ret) {
 HRESULT UiaNode::get_SelectionContainer(IRawElementProviderSimple** ret) {
     if (!ret) return E_POINTER;
     *ret = nullptr;
-    if (!impl || !control) return S_OK;
-    Control* host = IsGhost() ? control : impl->UiaParentOf(control);
-    UiaNode* node = host ? NodeFor(impl, host) : RootOf(impl);
+    if (!Available()) return UIA_E_ELEMENTNOTAVAILABLE;
+    if (!Impl() || !Target()) return S_OK;
+    Control* host = IsGhost() ? Target() : Impl()->UiaParentOf(Target());
+    UiaNode* node = host ? NodeFor(Impl(), host) : RootOf(Impl());
     node->AddRef();
     *ret = node;
     return S_OK;
 }
 
 LRESULT WindowImpl::UiaGetObject(WPARAM wparam, LPARAM lparam) {
+    if (uia_shutting_down_) return 0;
     if (!hwnd_ || static_cast<LONG>(lparam) != static_cast<LONG>(UiaRootObjectId)) {
         return DefWindowProcW(hwnd_, WM_GETOBJECT, wparam, lparam);
     }
@@ -633,23 +832,68 @@ LRESULT WindowImpl::UiaGetObject(WPARAM wparam, LPARAM lparam) {
                                        static_cast<IRawElementProviderSimple*>(root));
 }
 
-void WindowImpl::UiaShutdown() {
-    auto* state = static_cast<UiaState*>(uia_state_);
-    if (!state) return;
-    for (auto& pair : state->nodes) {
-        if (pair.second) {
-            UiaDisconnectProvider(static_cast<IRawElementProviderSimple*>(pair.second));
-            delete pair.second;
-        }
+namespace {
+// 调用者交出一个已有引用：成功即Release，失败由pending持有供STA下次重试。
+void DisconnectOwned(UiaNode* node) {
+    const HRESULT status = UiaDisconnectProvider(static_cast<IRawElementProviderSimple*>(node));
+    if (SUCCEEDED(status)) { node->Release(); return; }
+    Log(LogLevel::Warn, L"UiaDisconnectProvider failed: 0x%08lx", static_cast<unsigned long>(status));
+    if (node->pending) { node->Release(); return; }
+    node->pending = true;
+    node->pending_next = g_pending_disconnect;
+    g_pending_disconnect = node;
+}
+
+void DisconnectLink(const std::shared_ptr<UiaLink>& link) {
+    // 先给整条非拥有链临时引用，防COM断开重入释放后续节点。
+    for (auto* node = link->head; node; node = node->link_next) node->AddRef();
+    for (auto* node = link->head; node;) {
+        auto* next = node->link_next;
+        DisconnectOwned(node);
+        node = next;
     }
-    state->nodes.clear();
+}
+}
+
+bool UiaCanShutdown() {
+    // 必须在provider所属UI/STA线程；失败引用保留，下一次调用继续尝试。
+    auto* node = g_pending_disconnect;
+    g_pending_disconnect = nullptr;
+    while (node) {
+        auto* next = node->pending_next;
+        node->pending = false;
+        node->pending_next = nullptr;
+        DisconnectOwned(node);
+        node = next;
+    }
+    return g_live_providers.load() == 0;
+}
+
+void WindowImpl::UiaShutdown() {
+    uia_shutting_down_ = true;
+    auto* state = static_cast<UiaState*>(uia_state_);
+    uia_state_ = nullptr;
+    if (!state) return;
+    // 断开前使所有root、普通节点及共享link的Ghost一起失效。
+    for (auto& pair : state->nodes) {
+        if (!pair.second) continue;
+        pair.second->link->impl = nullptr;
+        pair.second->link->control = nullptr;
+    }
     if (state->root) {
-        UiaDisconnectProvider(static_cast<IRawElementProviderSimple*>(state->root));
-        delete state->root;
-        state->root = nullptr;
+        state->root->link->impl = nullptr;
+        state->root->link->control = nullptr;
+    }
+    for (auto& pair : state->nodes) {
+        if (!pair.second) continue;
+        DisconnectLink(pair.second->link);
+        pair.second->Release();
+    }
+    if (state->root) {
+        DisconnectLink(state->root->link);
+        state->root->Release();
     }
     delete state;
-    uia_state_ = nullptr;
 }
 
 void WindowImpl::UiaOnFocus() {
@@ -664,9 +908,13 @@ void WindowImpl::UiaForget(const Control* control) {
     if (!state || !control) return;
     const auto it = state->nodes.find(control);
     if (it == state->nodes.end()) return;
-    UiaDisconnectProvider(static_cast<IRawElementProviderSimple*>(it->second));
-    delete it->second;
+    auto* node = it->second;
     state->nodes.erase(it);
+    if (!node) return;
+    node->link->impl = nullptr;
+    node->link->control = nullptr;
+    DisconnectLink(node->link);
+    node->Release();
 }
 
 } // namespace lumen

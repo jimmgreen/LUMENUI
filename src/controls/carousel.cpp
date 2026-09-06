@@ -54,12 +54,14 @@ Rect Carousel::DotStrip() const noexcept {
 }
 
 bool Carousel::OnAnimate(float dt_seconds) {
-    if (EaseTo(slide_, static_cast<float>(current_), dt_seconds, 14.0f, 0.002f)) {
+    const bool base = Control::OnAnimate(dt_seconds);
+    const float before = slide_;
+    const bool more = EaseTo(slide_, static_cast<float>(current_), dt_seconds, 14.0f, 0.002f);
+    if (slide_ != before) {
         Place();
         Invalidate();
-        return true;
     }
-    return Control::OnAnimate(dt_seconds);
+    return more || base;
 }
 
 bool Carousel::OnWheel(float delta) {

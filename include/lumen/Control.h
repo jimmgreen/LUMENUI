@@ -1,5 +1,5 @@
 // lumen/Control.h — 控件基类。状态与动画归控件所有，窗口负责输入路由与重绘调度。
-// Events: 无（本头无订阅事件）
+// Events: BindFocused（焦点变化；OnFocused 链式在 ControlOf）
 // Keys: 焦点控件处理 Enter/Space/方向键等，详见 OnKey
 // Layout: 顶层窗口，客户区由 Root() 布局
 #pragma once
@@ -77,6 +77,7 @@ inline constexpr uint32_t kPatternRange = 1u << 3;
 inline constexpr uint32_t kPatternExpand = 1u << 4;
 inline constexpr uint32_t kPatternSelection = 1u << 5;
 inline constexpr uint32_t kPatternSelectionItem = 1u << 6;
+inline constexpr uint32_t kPatternGrid = 1u << 7;
 
 class Control {
 public:
@@ -94,6 +95,8 @@ public:
     bool HasFocus() const noexcept { return focused_; }
     // 把键盘焦点放到本控件。未入窗口树时空操作。
     Control& Focus();
+    // 若本控件持有逻辑焦点则清除（同 Window::ClearFocus）。未聚焦或未入树空操作。
+    Control& Blur();
     Panel* Parent() const noexcept { return parent_; }
 
     // 相对父容器的位置（DIP）。Row/Column/Grid 会在 Arrange 时覆盖此值。
@@ -108,6 +111,11 @@ public:
     Control& ToolTip(std::wstring_view text);
     Control& ToolTip(std::unique_ptr<class ToolTip> content);
     const std::wstring& ToolTip() const noexcept { return tooltip_; }
+    float ToolTipDelay() const noexcept { return tooltip_delay_; }
+    Control& ToolTipDelay(float seconds) {
+        tooltip_delay_ = seconds;
+        return *this;
+    }
     class ToolTip* ToolTipContent() const noexcept { return tooltip_content_.get(); }
     bool HasToolTip() const noexcept { return !tooltip_.empty() || tooltip_content_ != nullptr; }
     // 右键菜单：空菜单表示清除。未入窗口树时 ShowContextMenu 静默失败。
@@ -118,6 +126,8 @@ public:
     Window* WindowOf() const noexcept { return window_; }
     Control& AccessibleName(std::wstring_view name);
     const std::wstring& AccessibleName() const noexcept { return accessible_name_; }
+    Control& AccessibleHelp(std::wstring_view text) { accessible_help_ = text; return *this; }
+    const std::wstring& AccessibleHelp() const noexcept { return accessible_help_; }
     // UIA：类型/模式由控件头覆写；提供程序在 src/core/uia.cpp，不把 COM 类型暴露到公共头。
     virtual AutomationControlType AutomationType() const noexcept {
         return AutomationControlType::Pane;
@@ -147,6 +157,13 @@ public:
     virtual int AutomationItemCount() const noexcept { return 0; }
     virtual bool AutomationSelectIndex(int) { return false; }
     virtual std::wstring AutomationItemName(int) const { return {}; }
+    // Grid coordinates use current view rows and visible column order.
+    virtual int AutomationColumnCount() const noexcept { return 0; }
+    virtual std::wstring AutomationCellName(int, int) const { return {}; }
+    virtual std::wstring AutomationCellValue(int, int) const { return {}; }
+    virtual bool AutomationCellReadOnly(int, int) const { return true; }
+    virtual bool AutomationSetCellValue(int, int, std::wstring_view) { return false; }
+    virtual Rect AutomationCellBounds(int, int) const { return {}; }
     // LiveSetting：0 Off，1 Polite，2 Assertive。
     virtual int AutomationLiveSetting() const noexcept { return 0; }
 
@@ -172,6 +189,8 @@ public:
     virtual const class Panel* AsPanel() const noexcept { return nullptr; }
     // 最近一次布局后的窗口客户区绝对矩形（DIP）。
     const Rect& AbsoluteBounds() const noexcept { return absolute_; }
+    // 悬停提示气泡的锚点矩形；默认整个控件，复合控件（如 Table）可锚到局部单元格。
+    virtual Rect ToolTipAnchor() const { return absolute_; }
     Size DesiredSize() const noexcept { return desired_; }
 
     // 鼠标聚光（LUMEN 卡片光感）：开启后 Draw 中可读 spotlight_t_/spotlight_pos_
@@ -198,6 +217,10 @@ public:
         return static_cast<Self&>(*this);
     }
 
+    // 焦点变化订阅（获得/失去都发，参数为当前状态）。只观察，不影响焦点与 IME；
+    // 鼠标点击、Tab、程序 Focus()/Blur()、窗口切换都经此一点。
+    Connection BindFocused(std::function<void(bool focused)> handler);
+
     // 子树 token / 密度。Draw 与 Measure 经 EffectiveTheme 合成；无覆盖时返回 base。
     Control& Style(const ThemeOverride& o);
     Control& Density(lumen::Density d);
@@ -206,10 +229,15 @@ public:
 protected:
     friend class Window;
     friend class Panel;
+    // 焦点切换的唯一入口（WindowImpl::SetFocusControl）在 OnFocusChanged 之后调用。
+    void NotifyFocusEvent(bool focused) {
+        if (focused_signal_) focused_signal_->Emit(focused);
+    }
     static void DebugTrap(const wchar_t* message);
     void CommitRef() noexcept;
     void AbandonRef() noexcept;
     friend void DrawControlTree(Painter& painter, const Theme& theme, Control* root);
+    friend class PopupWindow;   // 弹出窗泵期内容树路由（R06）
     friend void DrawControlTree(Painter& painter, const Theme& theme, Control* root,
                                 const Rect& clip);
 
@@ -218,6 +246,7 @@ protected:
     virtual void Arrange(const Rect& absolute);
     // 帧前资源准备。可在设备首次出现或恢复后创建 GPU 资源；常态帧必须快速返回。
     virtual void Prepare(Painter& painter) { (void)painter; }
+    virtual void Prepare(Painter& painter, const Theme&) { Prepare(painter); }
     virtual void Draw(Painter& painter, const Theme& theme) = 0;
 
     // 输入（局部坐标，DIP）。返回 true 表示事件已处理。
@@ -325,6 +354,7 @@ protected:
     bool EaseTo(float& value, float target, float dt, float speed = 12.0f,
                 float epsilon = 0.002f);
     float MotionScale() const noexcept;
+    bool AdvanceAnimation(Tween& tween, float dt) const noexcept;
     // 键盘焦点环：按 focus_ring_t_ 生长；无窗口时若 FocusVisible 则满强度。
     void PaintFocusRing(Painter& painter, const Theme& theme, const Rect& r,
                         float radius) const;
@@ -367,12 +397,16 @@ protected:
     bool visible_ = true;
     bool enabled_ = true;
     std::wstring accessible_name_;
+    std::wstring accessible_help_;
     std::wstring tooltip_;
+    float tooltip_delay_ = -1.0f;
     std::unique_ptr<class ToolTip> tooltip_content_;
     std::unique_ptr<Menu> context_menu_;
     bool has_context_menu_ = false;
     Panel* parent_ = nullptr;
     Window* window_ = nullptr;   // 所在窗口（根控件由窗口注入，随容器下传）
+    // 焦点订阅（R17）：惰性分配，不订阅的控件零额外成本。WindowImpl 焦点切换点 Emit。
+    std::shared_ptr<Signal<bool>> focused_signal_;
 
 private:
     friend class WindowImpl;

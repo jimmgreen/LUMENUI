@@ -22,6 +22,8 @@ public:
     SettingsCard& Glyph(std::wstring_view value) { glyph_ = value; Invalidate(); return *this; }
     // 左图标底色块（默认无底）。
     SettingsCard& GlyphBackground(Color value) { glyph_bg_ = value; Invalidate(); return *this; }
+    SettingsCard& Compact(bool on = true) { compact_ = on; RelayoutParent(); return *this; }
+    SettingsCard& AccentBar(bool on = true) { accent_bar_ = on; Invalidate(); return *this; }
     // 整卡点击（Compound Action 类操作卡）；尾部控件区域点击不触发。
     SettingsCard& OnClick(std::function<void()> handler) {
         click_.Subscribe(std::move(handler));
@@ -64,6 +66,10 @@ protected:
     Color glyph_bg_{0.0f, 0.0f, 0.0f, 0.0f};
     float text_left_ = 0.0f;    // Arrange 阶段计算
     float text_width_ = 0.0f;
+    float title_height_ = 0.0f, text_height_ = 0.0f, layout_height_ = 0.0f, pad_ = 14.0f;
+    bool compact_ = false, accent_bar_ = false;
+    std::vector<Rect> tail_bounds_;
+    void ComputeGeometry(float width);
     Signal<> click_;
 };
 

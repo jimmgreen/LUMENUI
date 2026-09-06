@@ -12,6 +12,8 @@
 
 namespace lumen {
 
+enum class TextSyncResult { Unchanged, Applied, Conflict };
+
 class TextBox : public ControlOf<TextBox> {
 public:
     TextBox() = default;
@@ -19,6 +21,12 @@ public:
 
     const std::wstring& Text() const noexcept { return text_; }
     TextBox& Text(std::wstring_view value);  // 不触发 OnTextChanged，不入撤销栈
+    TextBox& ResetDocument(std::wstring_view value);
+    uint64_t Revision() const noexcept { return revision_; }
+    // 外部同步：过期版本、组合输入或有焦点的编辑草稿冲突时保留用户文本。
+    TextSyncResult SyncText(std::wstring_view value, uint64_t expected_revision);
+    TextBox& OnComposingChanged(std::function<void(bool)> fn) { composing_changed_.Subscribe(std::move(fn)); return *this; }
+    Connection BindComposingChanged(std::function<void(bool)> fn) { return composing_changed_.Connect(std::move(fn)); }
     TextBox& Text(std::string_view utf8) { return Text(U8(utf8)); }
     const std::wstring& Placeholder() const noexcept { return placeholder_; }
     TextBox& Placeholder(std::wstring_view value) {
@@ -50,6 +58,14 @@ public:
     // 占位符上浮成 Caption 标签（单行；与 FormField 外置标签互斥选用）。
     bool FloatingLabel() const noexcept { return floating_label_; }
     TextBox& FloatingLabel(bool value = true);
+    // 内容字体族覆盖（如 SJQY 钢筋字体）；空串 = 角色默认。测宽/光标/命中/绘制同源生效。
+    const std::wstring& FontFamily() const noexcept { return family_; }
+    TextBox& FontFamily(std::wstring_view value) {
+        if (family_ == value) return *this;
+        family_ = std::wstring(value);
+        Invalidate();
+        return *this;
+    }
 
     TextBox& OnTextChanged(std::function<void(std::wstring_view)> handler) {
         text_changed_.Subscribe(std::move(handler));
@@ -64,8 +80,25 @@ public:
     }
     Connection BindSubmit(std::function<void()> handler) { return submit_.Connect(std::move(handler)); }
     TextBox& BindText(Property<std::wstring>& p);
+    size_t SelectionStart() const noexcept;
+    size_t SelectionEnd() const noexcept;
+    bool HasSelection() const noexcept { return caret_ != anchor_; }
+    TextBox& Select(size_t start, size_t end);
+    // 选区/光标移动（打字、点击、方向键、Select、IME 提交都会触发）。观察用，
+    // 保存/恢复选区不再需要派生控件；索引单位与 Select/SelectionStart 一致。
+    TextBox& OnSelectionChanged(std::function<void()> handler) {
+        selection_changed_.Subscribe(std::move(handler));
+        return *this;
+    }
+    Connection BindSelectionChanged(std::function<void()> handler) {
+        return selection_changed_.Connect(std::move(handler));
+    }
+    // IME 行内组合进行中（拼音未上屏）。宿主据此决定键盘归属（CAD 抢焦点等）。
+    bool Composing() const noexcept { return ime_session_; }
 
 protected:
+    uint64_t revision_ = 0;
+    Signal<bool> composing_changed_;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;
@@ -89,7 +122,7 @@ protected:
     bool OnKey(uint32_t vk) override;
     bool OnChar(wchar_t ch) override;
     bool ImeInline() const noexcept override { return !read_only_; }
-    bool ImeComposing() const noexcept override { return !ime_comp_.empty(); }
+    bool ImeComposing() const noexcept override { return ime_session_; }
     void OnImeCompose(std::wstring_view text, size_t cursor, std::string_view attributes) override;
     void OnImeCommit(std::wstring_view text) override;
     void OnImeEnd() override;
@@ -107,9 +140,6 @@ protected:
     void RelayoutParent();
     void InsertText(const wchar_t* begin, size_t count);
     void DeleteSelection();
-    size_t SelectionStart() const noexcept;
-    size_t SelectionEnd() const noexcept;
-    bool HasSelection() const noexcept { return caret_ != anchor_; }
     void SetCaret(size_t index, bool extend = false, bool scroll_to_caret = true);
     float CaretX(size_t index) const;
     float CaretY(size_t index) const;
@@ -121,7 +151,7 @@ protected:
     size_t LineEnd(size_t index) const;
     size_t HitIndex(Point local) const;
     void NotifyImeCaret();
-    void ClearCompose();
+    void ClearCompose(bool notify = true);
     float VisualCaretX() const;
     void DrawComposition(Painter& painter, const Theme& theme, float x, float text_y, float text_h,
                          float band_y, float band_h) const;
@@ -141,6 +171,7 @@ protected:
     bool Undo();
     bool Redo();
     void NotifyChanged();
+    void NotifySelectionChanged() { selection_changed_.Emit(); }   // 选区/光标挂点共用
     size_t WordLeft(size_t index) const;
     size_t WordRight(size_t index) const;
     void SelectWordAt(size_t index);
@@ -162,6 +193,7 @@ protected:
     std::wstring placeholder_;
     std::wstring glyph_;
     std::wstring ime_comp_;
+    bool ime_session_ = false;
     std::string ime_attr_;
     size_t ime_cursor_ = 0;
     wchar_t pending_high_surrogate_ = 0;
@@ -173,6 +205,7 @@ protected:
     bool password_ = false;
     bool multiline_ = false;
     bool floating_label_ = false;
+    std::wstring family_;
     bool caret_on_ = true;
     float blink_t_ = 0.0f;
     float float_t_ = 0.0f;
@@ -192,6 +225,7 @@ protected:
     std::vector<Snapshot> redo_;
     Signal<std::wstring_view> text_changed_;
     Signal<> submit_;
+    Signal<> selection_changed_;   // 选区/光标移动（R17）
     ScopedConnection text_prop_;
     ScopedConnection text_ctrl_;
     bool bind_loop_ = false;

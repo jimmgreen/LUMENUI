@@ -62,6 +62,16 @@ public:
         item_glyph_ = std::move(provider);
         return *this;
     }
+    // 可见行的 24 DIP 图标槽；回调只绘制，不能分配资源或修改树。
+    ListView& ItemIcon(std::function<void(size_t, Painter&, const Theme&, const Rect&)> draw) {
+        item_icon_ = std::move(draw); Invalidate(); return *this;
+    }
+    ListView& ActivateOnClick(bool on = true) { activate_on_click_ = on; return *this; }
+    // 仅此列表的文字角色；默认正文 Body、分组 CaptionStrong，不改变全局字体。
+    ListView& ItemTextRole(TextRole role) { item_text_role_ = role; Invalidate(); return *this; }
+    TextRole ItemTextRole() const noexcept { return item_text_role_; }
+    ListView& GroupTextRole(TextRole role) { group_text_role_ = role; Invalidate(); return *this; }
+    TextRole GroupTextRole() const noexcept { return group_text_role_; }
 
     // 单选模式（默认）下 SelectedIndex 即选中行；多选模式下它是焦点行
     // （点击/键盘最后到达的行），Shift 范围以 keyboard_anchor_ 为锚。
@@ -246,6 +256,8 @@ protected:
     ptrdiff_t hover_group_ = -1;
     std::function<void(size_t, std::wstring&)> item_text_;
     std::function<void(size_t, std::wstring&)> item_glyph_;
+    std::function<void(size_t, Painter&, const Theme&, const Rect&)> item_icon_;
+    bool activate_on_click_ = false;
     ItemsModel* model_ = nullptr;
     std::shared_ptr<ItemsModel> owned_model_;
     ScopedConnection model_inserted_;
@@ -256,6 +268,8 @@ protected:
     mutable ItemRow model_row_;
     mutable ptrdiff_t model_cache_ = -1;
     std::wstring draw_text_;    // 绘制期复用（容量跨帧保留，零堆）
+    TextRole item_text_role_ = TextRole::Body;
+    TextRole group_text_role_ = TextRole::CaptionStrong;
     std::wstring draw_glyph_;
     Signal<ptrdiff_t, ptrdiff_t> selection_changed_;
     Signal<size_t> activate_;

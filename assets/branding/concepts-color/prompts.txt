@@ -1,0 +1,27 @@
+# LUMEN 彩色图标概念
+
+内置 imagegen 生成的五个方向，供选择后进一步高清细化。
+
+01-aurora.png — 极光折面
+02-core.png — 冰蓝光核
+03-eclipse.png — 香槟日蚀
+04-layers.png — 虹彩叠片
+05-flow.png — 紫银流光
+
+公共提示词：
+Create one beautiful finished concept PNG application icon for LUMEN, a premium native Windows desktop UI framework. The brand personality is elegant, luminous, precise, modern, glassy, visually rich against dark interfaces. Creative freedom with color; make a sophisticated memorable software brand icon rather than a generic glass material sample. One centered sculptural symbol on a softly rounded square dark-glass app tile, balanced generous negative space, near-frontal camera with beautiful subtle depth. Cinematic high-end 3D product render, thick transparent optical materials, excellent refraction, smooth surfaces, controlled light. Rich but tasteful color, high contrast silhouette, strong at thumbnail size. Square image. No labels, words, letters, watermark, infinity symbol or figure eight. Only one icon, no presentation sheet. Background outside tile near-black.
+
+极光折面
+ART DIRECTION: A single broad clear-glass folded diamond sail, gently twisted diagonally, floating above a deep ink-black rounded-square tile. Elegant unique asymmetric four-point folded silhouette, light and architectural. The fold catches flowing aurora colors: luminous cool mint and cyan along one edge, soft lavender and periwinkle within the curved glass, a tiny pale peach reflection on the tip. Wide transparent facets with dark interior transmitted areas, exquisite thin white glints and layered refractions. A soft cyan-lilac caustic on the tile below. Restrained luminous futuristic beauty, no fog, no overblown neon. Crisp intentional geometry mixed with a fluid curve.
+
+冰蓝光核
+ART DIRECTION: One compact smooth translucent midnight-blue rounded cube containing a luminous small icy-white orb, its light refracted through thick clear ice-blue glass walls. The internal light creates faint displaced cyan images on adjacent curved faces, making convincing glass optics. Three-quarter view with strong readable compact silhouette. Deep navy-black rounded-square app tile with very fine cool silver-blue glass bevel. Cyan highlights, tiny violet shadows, bright white central core. Evoke light inside a beautifully engineered interface. Calm confident sophisticated, no markings, no dice-like dots on the exterior, the orb clearly suspended INSIDE.
+
+香槟日蚀
+ART DIRECTION: Reimagine a solar eclipse as one asymmetric thick sculptural circular optical-glass halo with a dark circular aperture, slender upper-left rim and a luxuriously thick clear crescent along lower right. Warm champagne light trapped inside transparent smoky crystal, pale ivory highlights and subtle bronze-to-rose-gold edge refractions, dark clear midtones; genuinely translucent GLASS, not metallic gold jewelry. Single elegant trailing light wisp beneath. Floating above charcoal-black rounded-square glass tile. Heritage luxury meets futuristic software. Beautiful high contrast restrained warm light, clear optical volume. No additional rings, no noisy particles.
+
+虹彩叠片
+ART DIRECTION: Three softly rounded transparent glass square panes overlap in a compact elegant fan, slightly rotated relative to each other, diagonally rising from lower left to upper right. They form one integrated original layered interface emblem, readable at small size. Front pane clear icy cyan glass, middle pane translucent periwinkle violet, rear pane subtle soft pink-peach glass; all have deep clear interiors and white polished beveled edges. Overlaps create beautiful optically mixed colors and caustics. The geometry suggests composable UI panels and light. Mounted on a near-black softly rounded square tile, generous breathing room. Precisely art-directed minimal composition, refined colorful glass, not a stack of app screenshots, no text or UI details.
+
+紫银流光
+ART DIRECTION: A single sculpted flowing clear-glass flame with a broad rounded lower lobe tapering into an elegant curved upward tip, no hole and no loop. Smooth liquid lens surface tension, polished thick clear crystal, dark translucent lavender interior. A luminous violet-to-electric-periwinkle refraction ribbon curls INSIDE the solid glass flame, with brilliant silver-white highlights along one side and a tiny magenta edge reflection. Sinuous simple memorable asymmetric silhouette. Float above a smoked black rounded-square tile with a restrained purple caustic. Contemporary creative tool identity, energetic yet premium, not fire illustration, not opaque liquid chrome. Emphasize glass depth and light moving through material.

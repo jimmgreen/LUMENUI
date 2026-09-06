@@ -1,0 +1,36 @@
+BUILT-IN IMAGEGEN — INITIAL IDENTITY PASS
+
+Use case: logo-brand.
+Asset type: final application icon for LUMENUI, an achromatic dark native Windows UI framework.
+Image 1 is the EXISTING LUMENUI BRAND LOGO and is the SUBJECT AND IDENTITY REFERENCE. It has one elegant solar-eclipse circle, dark circular center, a thin luminous edge at top left and a brilliant thicker crescent on the lower right, with a subtle trailing light at the bottom. THIS is the identity to preserve.
+Image 2 is MATERIAL REFERENCE ONLY. Borrow ONLY its sophisticated transparent optical glass, depth, curved refractions, soft highlights. DO NOT borrow its infinity shape, second inner rounded-square tile or layout.
+Primary request: Reimagine the existing LUMENUI eclipse logo as a beautiful 3D clear optical-glass eclipse, ONE SINGLE CIRCULAR glass halo, with a dark open center, an extremely slender clear rim around the upper left and a thicker asymmetric lens-like crescent around the lower right. The silhouette should immediately read as a solar eclipse, not a regular chrome donut, not an infinity loop, not a number 8. Elegant subtle layered clear glass curved surfaces along the crescent create recognizable luminous eclipse. Retain a very restrained tangential light wisp extending left from the bottom as in original identity.
+Place this single eclipse centrally on one deep charcoal-black softly rounded square app tile with delicate glass bevel perimeter. Remove the text from original for small-size legibility. Fill about 64% of tile width with eclipse. Quiet generous negative space; centered, timeless branded software icon.
+Material: truly translucent polished optical crystal, smoked glass in shadow, detailed transparent glass depth and gentle curved caustics, thin white highlights, bright soft white crescent at lower right. Broad calm reflections, avoid busy liquid chrome.
+Palette strictly neutral black, gray and white. No color, rainbow, cyan, purple, gold.
+Square 1024x1024 image, straight-on camera, tile filling 90 percent canvas, balanced margins. Pure black background outside tile. No checkerboard.
+Constraints: exactly ONE circular eclipse mark; NO infinity loop, NO figure eight, NO chain links, NO letter L, NO second inner square panel, NO text or lettering, NO watermark. Preserve the eclipse identity of image 1 while adopting only the glass material qualities of image 2. Produce a finished usable PNG icon.
+
+
+MATERIAL REFINEMENT
+
+Use case: lighting-weather / material refinement.
+Image 1 is the current LUMEN eclipse icon to improve. Preserve its SINGLE CIRCULAR ECLIPSE identity, black rounded-square base, grayscale palette, centered composition and lack of text.
+Image 2 is GLASS MATERIAL REFERENCE ONLY: ignore its infinity subject, colors, phone screenshot and secondary square pane. Study the thick clear sculpted-glass refraction and liquid-looking transparent volume.
+Problem in image 1: It reads like a glowing eclipse or a white luminous line. The bottom crescent is overexposed and the glass volume is missing.
+Required edit: transform the eclipse rim into a visibly THICK sculptural transparent optical-crystal CRESCENT lens. One circular dark aperture at center; the clear glass around it should grow from a slender 12px rim at upper-left to a 75px thick lens at lower-right in a 1024px icon. Give that crescent rounded smoothly twisted convex faces and complex but elegant physically plausible internal refraction, like thick crystal in the material reference. The lower-right crescent MUST contain dark transparent midtones, sharp reflected white softbox streaks, and several overlapping curved refracted silhouettes of its own rear edge. Distinct front surface and rear glass edge, clearly visible thickness, polished rounded bevels. Render transmitted background visible through the glass, some magnification and curved distortion. This is a solid clear glass sculptural eclipse, not a flat line, not an opaque metal ring.
+Reduce bloom by 85 percent, no overexposed white patches, no white light fog. Most glass area should be clear gray/black with concentrated white specular reflections occupying under 15 percent of the glass surface. Use side/raking studio lighting to reveal thickness, an elongated white reflection at upper left, subtle caustic beneath the lower right.
+Remove the large ghost trails to the right, and remove the long luminous tail if it obscures the glass. Keep one delicate secondary glass rear rim only. Elegant premium restrained icon, not smoky or spectral.
+Base: deep smoked-glass rounded square, gentle broad gray reflection along upper left, double refractive transparent bevel perimeter with tiny specular edges. No internal square pane.
+Composition: square 1024 image, centered icon, near frontal with slight 3D depth. Pure black exterior background. Grayscale only. No infinity shape, no number eight, no words, no letters, no iridescence, no checkerboard. Output finished PNG.
+
+FINAL REFINEMENT
+
+Use case: identity-preserve / icon refinement.
+Edit this LUMEN glass eclipse icon. Preserve the excellent transparent optical crystal material: dark clear interior, smoothly curved internal refractions, visible glass thickness, distinct front and rear surface, fine controlled white reflections. Preserve the black smoked-glass rounded-square tile and strictly monochrome palette.
+Make ONLY these targeted refinements:
+1. Make the central dark aperture a clean near-perfect CIRCLE, front facing, rather than a diagonally stretched oval. The overall mark is a circular eclipse. Glass is still asymmetric in thickness: slender at upper left, thicker on lower right. Keep the liquid crystal crescent surfaces, not a uniform donut.
+2. Slightly shrink the entire eclipse sculpture to leave balanced visual breathing room, about 62% of the tile width. Center the visual mass within the tile.
+3. Remove the starburst/flower-like cast caustics below. Float the eclipse subtly above the tile with only a very soft contact shadow and tiny diffuse caustic under the lower-right glass.
+4. Simplify the tiny duplicated bright bottom ripples so the glass surfaces feel like one smooth flowing sculpted crystal crescent with 2 or 3 large curved transparent facets. Retain enough fine refraction detail for authentic glass, while making the single-circle silhouette readable at 32px.
+No other redesign. No glow fog, no opaque chrome, no white filled crescent, no infinity/8 shape, no secondary inner square, no letters, no text, no colors. Square finished high-resolution PNG, pure black outside tile, no checkerboard.

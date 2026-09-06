@@ -31,7 +31,8 @@ Size ProgressRing::Measure(Size, const Theme&) {
 }
 
 bool ProgressRing::OnAnimate(float dt_seconds) {
-    if (!indeterminate_) return Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    if (!indeterminate_ || MotionScale() <= 0.001f) return base;
     phase_ += dt_seconds;
     // kRange=180°：两周期 extra 恰为 360°，回绕后起点模 360 连续。
     constexpr float kPeriod = 1.8f;

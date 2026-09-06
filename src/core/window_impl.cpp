@@ -3,6 +3,7 @@
 // frame_chrome、ime_bridge、tray_host、timer_host。
 #include "window_impl.h"
 #include "app_host.h"
+#include "popup_window.h"
 #include "hotkey.h"
 #include "lumatext_bridge.h"
 #include "lumen/App.h"
@@ -55,7 +56,6 @@
 namespace {
 // 存活窗口数：最后一个窗口销毁时投 WM_QUIT，App::Run 才能返回（否则进程僵留）。
 int g_live_windows = 0;
-constexpr UINT kWmPost = WM_APP + 0x20;
 } // namespace
 #ifndef DWMWA_BORDER_COLOR
 #define DWMWA_BORDER_COLOR 34
@@ -405,14 +405,22 @@ DWORD WindowImpl::DragUnicodeText(std::wstring_view text) {
     return effect;
 }
 
-Window::Window(std::wstring_view title, Size client_size, Frame frame) {
-    App::Ensure();
+namespace {
+void CheckDpiContext([[maybe_unused]] void (*debugTrap)(const wchar_t*)) {
 #ifndef NDEBUG
-    if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
+    // 宿主模式下进程上下文由宿主决定，窗口在构造期切到 PMv2（DpiContextScope）。
+    if (!App::HostMode() &&
+        !AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
                                       DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
-        Control::DebugTrap(L"LUMEN_CHECK: process DPI awareness is not Per-Monitor V2");
+        debugTrap(L"LUMEN_CHECK: process DPI awareness is not Per-Monitor V2");
     }
 #endif
+}
+} // namespace
+
+Window::Window(std::wstring_view title, Size client_size, Frame frame) {
+    App::Ensure();
+    CheckDpiContext(&Control::DebugTrap);
     // impl_ stays null until this assignment returns. WindowImpl's ctor CreateWindow
     // can re-enter Paint; controls must not call window_->Impl() on a half-built unique_ptr.
     impl_ = std::make_unique<WindowImpl>(this, title, client_size, frame);
@@ -422,40 +430,76 @@ Window::Window(std::wstring_view title) : Window(WindowSpec{.title = std::wstrin
 
 Window::Window(WindowSpec spec) {
     App::Ensure();
-#ifndef NDEBUG
-    if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
-                                      DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
-        Control::DebugTrap(L"LUMEN_CHECK: process DPI awareness is not Per-Monitor V2");
-    }
-#endif
+    CheckDpiContext(&Control::DebugTrap);
     Size size = spec.size;
     if (size.w <= 0.0f) size.w = 960.0f;
     if (size.h <= 0.0f) size.h = 640.0f;
-    impl_ = std::make_unique<WindowImpl>(this, spec.title, size, spec.frame);
+    impl_ = std::make_unique<WindowImpl>(this, spec.title, size, spec.frame,
+                                         static_cast<HWND>(spec.owner), spec.titleBar,
+                                         static_cast<HWND>(spec.matchDpiHwnd));
     Backdrop(spec.backdrop);
-    MinSize({size.w * 0.6f, size.h * 0.6f});
-    impl_->LoadFirstExeIcon();
+    // 无标题栏弹出层保持固定客户区，勿再缩 MinSize。
+    if (spec.titleBar)
+        MinSize({size.w * 0.6f, size.h * 0.6f});
+    else
+        MinSize(size);
+    if (spec.titleBar)
+        impl_->LoadFirstExeIcon();
 }
 
-Window::~Window() = default;
+Window::~Window() { if (impl_ && impl_->Hwnd()) DestroyWindow(impl_->Hwnd()); }
+
+UiDispatcher Window::Dispatcher() const {
+    return UiDispatcher([port = impl_->port_](std::function<void()> fn) {
+        return port->Post(std::move(fn));
+    });
+}
 
 WindowImpl* Window::Impl() const noexcept { return impl_.get(); }
 StackPanel& Window::Root() { return impl_->Root(); }
 TitleBar* Window::TitleBar() { return impl_->TitleBarPtr(); }
 void Window::Show() {
+    auto port = impl_->port_;
+    if (!Visible()) showing_.Emit();
+    if (!port->target.load()) return;
+    if (fit_pending_) { fit_pending_ = false; FitContent(fit_width_); }
     if (impl_->Root().ChildCount() == 0) Log(LogLevel::Warn, L"empty root");
     impl_->Show();
+}
+void Window::Hide() { if (impl_->Hwnd()) ShowWindow(impl_->Hwnd(), SW_HIDE); }
+bool Window::Visible() const { return impl_->Hwnd() && IsWindowVisible(impl_->Hwnd()); }
+bool Window::Activated() const { return impl_->activated_state_; }
+void Window::FitContent(float preferred_width) {
+    if (!impl_->Hwnd() || !std::isfinite(preferred_width) || preferred_width <= 0.0f) return;
+    MONITORINFO monitor{sizeof(monitor)};
+    if (!GetMonitorInfoW(MonitorFromWindow(impl_->Hwnd(), MONITOR_DEFAULTTONEAREST), &monitor)) return;
+    const float scale = impl_->Scale();
+    const float max_width = std::max(120.0f, (monitor.rcWork.right - monitor.rcWork.left) / scale - 32.0f);
+    const float max_height = std::max(80.0f, (monitor.rcWork.bottom - monitor.rcWork.top) / scale - 64.0f);
+    const float width = std::min(preferred_width, max_width);
+    const Size desired = MeasureContent(width);
+    Resize({width, std::min(std::max(1.0f, desired.h), max_height)});
 }
 void Window::Close() { impl_->Close(); }
 bool Window::Closed() const { return impl_->Closed(); }
 void Window::Title(std::wstring_view text) { impl_->Title(text); }
 void Window::Resize(Size client_size) { impl_->Resize(client_size); }
+Size Window::MeasureContent(float client_width) { return impl_->MeasureContent(client_width); }
 void Window::MinSize(Size min_size) { impl_->MinSize(min_size); }
 void Window::GlowIntensity(float intensity) { impl_->GlowIntensity(intensity); }
 float Window::GlowIntensity() const { return impl_->glow_intensity_; }
+void Window::PerfHud(bool on) { impl_->PerfHud(on); }
+bool Window::PerfHud() const { return impl_->perf_hud_on_; }
 lumen::Backdrop Window::Backdrop() const { return impl_->backdrop_; }
 void Window::Backdrop(lumen::Backdrop backdrop) { impl_->SetBackdrop(backdrop); }
 const Theme& Window::VisualTheme() const { return impl_->theme_; }
+void Window::Motion(MotionMode mode) {
+    if (impl_->motion_mode_ == mode) return;
+    impl_->motion_mode_ = mode;
+    impl_->RefreshTheme();
+    impl_->RequestAnimation();
+}
+MotionMode Window::Motion() const { return impl_->motion_mode_; }
 void Window::OnClosing(std::function<bool()> callback) { impl_->closing_ = std::move(callback); }
 void Window::ShowDialog(Dialog& dialog) { impl_->ShowDialog(dialog); }
 
@@ -519,7 +563,19 @@ Control* Window::FocusNext(bool backwards) {
     return c;
 }
 
+void Window::ClearFocus() { impl_->ClearFocus(); }
+
 Connection Window::OnFrame(std::function<bool(float dt)> fn) { return impl_->OnFrame(std::move(fn)); }
+
+void Window::OnNativeMessage(
+    std::function<void(uint32_t msg, std::uintptr_t wparam, std::intptr_t lparam)> fn) {
+    impl_->OnNativeMessage(std::move(fn));
+}
+
+Connection Window::BindNativeMessage(
+    std::function<void(uint32_t msg, std::uintptr_t wparam, std::intptr_t lparam)> fn) {
+    return impl_->BindNativeMessage(std::move(fn));
+}
 
 void Window::Icon(int resource_id) { impl_->SetIcon(resource_id); }
 void Window::Icon(std::wstring_view path_or_name) { impl_->SetIcon(path_or_name); }
@@ -527,16 +583,20 @@ void Window::Icon(std::span<const std::byte> ico) { impl_->SetIconMemory(ico); }
 
 void Window::DumpTree(std::wostream& out) const { impl_->DumpTree(out); }
 
-void Window::RunAsync(std::function<void()> work, std::function<void()> then) {
-    impl_->RunWorker(std::move(work), std::move(then));
+TaskHandle Window::RunAsync(std::function<void()> work, std::function<void()> then) {
+    return RunAsync([work = std::move(work)](const TaskHandle&) { if (work) work(); },
+                    std::move(then));
 }
-
-void Window::RunAsync(std::function<void()> work, std::function<void()> then, std::wstring_view busy) {
-    ShowBusy(busy);
-    RunAsync(std::move(work), [this, then = std::move(then)] {
-        CloseBusy();
-        if (then) then();
-    });
+TaskHandle Window::RunAsync(std::function<void()> work, std::function<void()> then,
+                            std::wstring_view busy) {
+    return RunAsync([work = std::move(work)](const TaskHandle&) { if (work) work(); },
+                    std::move(then), busy);
+}
+TaskHandle Window::RunAsync(std::function<void(const TaskHandle&)> work,
+                            std::function<void()> then, std::wstring_view busy) {
+    if (!busy.empty()) ShowBusy(busy);
+    try { return impl_->RunWorker(std::move(work), std::move(then), busy); }
+    catch (...) { if (!busy.empty()) CloseBusy(); throw; }
 }
 
 void Window::ShowToast(std::string_view utf8) { ShowToast(U8(utf8)); }
@@ -552,6 +612,12 @@ void Window::ShowTeachingTip(TeachingTip& tip, const Control* anchor) {
 void Window::CloseFlyout() { impl_->CloseFlyout(); }
 
 bool Window::FlyoutActive() const { return impl_->FlyoutActive(); }
+void Window::ShowPopup(Control& content, const Control* anchor, float width,
+                       std::function<void()> closed) {
+    impl_->ShowPopup(content, anchor, width, std::move(closed));
+}
+void Window::ClosePopup() { impl_->ClosePopup(); }
+bool Window::PopupActive() const { return impl_->PopupActive(); }
 void Window::CloseDialog() { impl_->CloseDialog(); }
 void Window::ShowToast(std::wstring_view text) { impl_->ShowToast(text); }
 void Window::ShowToast(std::wstring_view text, ToastKind kind) {
@@ -563,6 +629,10 @@ void Window::ShowToast(std::wstring_view text, ToastKind kind) {
 void Window::ShowToast(ToastData data) { impl_->ShowToast(std::move(data)); }
 void Window::ToastMotion(lumen::ToastMotion motion) { impl_->SetToastMotion(motion); }
 lumen::ToastMotion Window::ToastMotion() const { return impl_->GetToastMotion(); }
+void Window::ToastPlacement(lumen::ToastPlacement placement) { impl_->SetToastPlacement(placement); }
+lumen::ToastPlacement Window::ToastPlacement() const { return impl_->GetToastPlacement(); }
+void Window::ToastMargin(float margin) { impl_->SetToastMargin(margin); }
+float Window::ToastMargin() const { return impl_->GetToastMargin(); }
 bool Window::DialogActive() const { return impl_->active_dialog_ != nullptr; }
 void Window::Invalidate() { impl_->Invalidate(); }
 void Window::LayoutNow() { impl_->LayoutNow(); }
@@ -591,7 +661,7 @@ bool Window::BusyActive() const { return impl_->BusyActive(); }
 void Window::ShowDrawer(Drawer& drawer, Edge edge) { impl_->ShowDrawer(drawer, edge); }
 void Window::CloseDrawer() { impl_->RequestCloseDrawer(); }
 bool Window::DrawerActive() const { return impl_->DrawerActive(); }
-void Window::Post(std::function<void()> fn) { impl_->Post(std::move(fn)); }
+PostResult Window::Post(std::function<void()> fn) { return impl_->Post(std::move(fn)); }
 bool Window::IsUiThread() const { return impl_->IsUiThread(); }
 Window::TimerId Window::SetInterval(float seconds, std::function<void()> fn) {
     return impl_->SetInterval(seconds, std::move(fn), false);
@@ -649,24 +719,34 @@ Connection Window::BindTrayClick(std::function<void()> handler) {
 void Window::MinimizeToTray(bool on) { impl_->MinimizeToTray(on); }
 void Window::TrayMenu(Menu menu) { impl_->SetTrayMenu(std::move(menu)); }
 
-WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame)
+WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame,
+                       HWND owner, bool title_bar, HWND match_dpi_hwnd)
     : api_(api), frame_(frame), title_(title), glow_intensity_(0.5f) {
     ui_thread_id_ = GetCurrentThreadId();
     QueryPerformanceFrequency(&qpc_freq_);
     root_ = std::make_unique<StackPanel>();
     root_->window_ = api_;
-    if (frame_ == Frame::Client) {
+    if (frame_ == Frame::Client && title_bar) {
         title_bar_ = std::make_unique<TitleBar>();
         title_bar_->window_ = api_;
         title_bar_->title_ = title_;
     }
     EnsureWindowClass();
+    // 宿主模式默认 PMv2；嵌入子窗时对齐父窗 DPI 感知，否则 SetParent 报 ERROR_INVALID_STATE。
+    DpiContextScope dpi_scope(match_dpi_hwnd);
     scale_ = static_cast<float>(GetDpiForSystem()) / 96.0f;
     POINT cursor{};
-    if (GetCursorPos(&cursor)) {
-        HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    RECT owner_rect{};
+    const bool has_owner = owner && IsWindow(owner) && GetWindowRect(owner, &owner_rect);
+    HMONITOR anchor_monitor = nullptr;
+    if (has_owner) {
+        anchor_monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+    } else if (GetCursorPos(&cursor)) {
+        anchor_monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    }
+    if (anchor_monitor) {
         UINT dpi_x = 96, dpi_y = 96;
-        if (monitor && SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y))) {
+        if (SUCCEEDED(GetDpiForMonitor(anchor_monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y))) {
             scale_ = static_cast<float>(dpi_x) / 96.0f;
         }
     }
@@ -680,15 +760,25 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
     int y = CW_USEDEFAULT;
     const int width = rect.right - rect.left;
     const int height = rect.bottom - rect.top;
-    if (frame_ == Frame::Client && GetCursorPos(&cursor)) {
+    if (frame_ == Frame::Client && anchor_monitor) {
         MONITORINFO monitor{sizeof(monitor)};
-        if (GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        if (has_owner && !IsIconic(owner)) {
+            x = owner_rect.left + (owner_rect.right - owner_rect.left - width) / 2;
+            y = owner_rect.top + (owner_rect.bottom - owner_rect.top - height) / 2;
+            if (GetMonitorInfoW(anchor_monitor, &monitor)) {
+                x = std::clamp<int>(x, monitor.rcWork.left,
+                                    std::max<int>(monitor.rcWork.left, monitor.rcWork.right - width));
+                y = std::clamp<int>(y, monitor.rcWork.top,
+                                    std::max<int>(monitor.rcWork.top, monitor.rcWork.bottom - height));
+            }
+        } else if (GetMonitorInfoW(anchor_monitor, &monitor)) {
             x = monitor.rcWork.left + (monitor.rcWork.right - monitor.rcWork.left - width) / 2;
             y = monitor.rcWork.top + (monitor.rcWork.bottom - monitor.rcWork.top - height) / 2;
         }
     }
-    hwnd_ = CreateWindowExW(ex_style, L"lumen_window", title_.c_str(), style, x, y, width, height,
-                            nullptr, nullptr, GetModuleHandleW(nullptr), this);
+    hwnd_ = CreateWindowExW(ex_style, LumenClassName(LumenClass::Window), title_.c_str(), style, x,
+                            y, width, height, has_owner ? owner : nullptr, nullptr, LumenModule(),
+                            this);
     if (hwnd_) ++g_live_windows;
     if (hwnd_) {
         scale_ = static_cast<float>(GetDpiForWindow(hwnd_)) / 96.0f;
@@ -703,7 +793,9 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
 }
 
 WindowImpl::~WindowImpl() {
-    keep_alive_.reset();
+    PopupWindow::OwnerDestroyed(this);
+    // 先关投递端口：后台线程的结果从此只能标记 Dropped，不会再触碰本对象。
+    port_->Close();
     UiaShutdown();
     if (active_busy_) CloseBusy();
     if (active_drawer_) FinishDrawer();
@@ -716,25 +808,25 @@ WindowImpl::~WindowImpl() {
 }
 
 void WindowImpl::EnsureWindowClass() {
-    static const bool registered = [] {
-        WNDCLASSEXW wc{};
-        wc.cbSize = sizeof(wc);
-        wc.style = CS_DBLCLKS;
-        wc.lpfnWndProc = &WindowImpl::WndProc;
-        wc.hInstance = GetModuleHandleW(nullptr);
-        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-        wc.lpszClassName = L"lumen_window";
-        const ATOM atom = RegisterClassExW(&wc);
+    EnsureLumenClass(LumenClass::Window, &WindowImpl::WndProc, CS_DBLCLKS, true);
+    // 进程级且不可撤销：宿主模式（AutoCAD 等）不能替宿主改鼠标消息形态，走 WM_MOUSE* 路径。
+    static bool pointer_enabled = false;
+    if (!pointer_enabled && !App::HostMode()) {
         EnableMouseInPointer(TRUE);
-        return atom != 0;
-    }();
-    (void)registered;
+        pointer_enabled = true;
+    }
 }
 
 LRESULT CALLBACK WindowImpl::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        auto* self = static_cast<WindowImpl*>(create->lpCreateParams);
+        self->hwnd_ = hwnd;
+        self->port_->target.store(hwnd, std::memory_order_release);
+        self->port_->wake = [](void* target) {
+            return PostMessageW(static_cast<HWND>(target), kWmPost, 0, 0) != FALSE;
+        };
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
     auto* self = reinterpret_cast<WindowImpl*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -743,8 +835,37 @@ LRESULT CALLBACK WindowImpl::WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
 }
 
 LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
-    if (!hwnd_) hwnd_ = hwnd;
+    if (!native_message_.Empty()) {
+        native_message_.Emit(static_cast<uint32_t>(msg), static_cast<std::uintptr_t>(wparam),
+                             static_cast<std::intptr_t>(lparam));
+    }
+    PopupWindow::OwnerMessage(this, msg, wparam);
+    if (PopupWindow::FilterInput(this, hwnd, msg, wparam, lparam)) return 0;
     switch (msg) {
+    case WM_SHOWWINDOW:
+        if (shown_state_ != (wparam != 0)) {
+            shown_state_ = wparam != 0;
+            if (!shown_state_) {
+                if (active_flyout_) CloseFlyout();
+                HideTooltip(true);
+                OnHwndFocus(false);
+                if (api_) api_->hidden_.Emit();
+            } else if (api_) api_->shown_.Emit();
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    case WM_ACTIVATE:
+        if (activated_state_ != (LOWORD(wparam) != WA_INACTIVE)) {
+            activated_state_ = LOWORD(wparam) != WA_INACTIVE;
+            if (api_) api_->activated_.Emit(activated_state_);
+        }
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    case WM_NCDESTROY:
+        // 最终解除原生句柄关系，后续消息不得重新绑定已经销毁的 HWND。
+        // 投递端口先关接收门：拒绝后到的任务/结果，而不是让它们触碰垂死的窗口。
+        port_->Close();
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        hwnd_ = nullptr;
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
     case WM_PAINT: {
         PAINTSTRUCT ps;
         BeginPaint(hwnd_, &ps);
@@ -821,6 +942,8 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         break;
     case WM_NCLBUTTONDBLCLK:
         if (frame_ == Frame::Client && wparam == HTCAPTION) {
+            if (title_bar_ && !title_bar_->ShowMaximize())
+                return 0;
             ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
             return 0;
         }
@@ -983,10 +1106,10 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         return 0;
     case WM_IME_CHAR:
-        if (focused_ && focused_->ImeInline()) return 0;
+        if (ImeTarget() && ImeTarget()->ImeInline()) return 0;
         break;
     case WM_IME_SETCONTEXT: {
-        if (focused_ && focused_->ImeInline()) {
+        if (ImeTarget() && ImeTarget()->ImeInline()) {
             lparam &= ~ISC_SHOWUICOMPOSITIONWINDOW;
         }
         const LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -996,19 +1119,20 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_IME_STARTCOMPOSITION:
         SyncImeCaret();
         // DefWindowProc 会造系统组字窗（拼音浮在框外那块白底）。行内组字必须吃掉。
-        if (focused_ && focused_->ImeInline()) return 0;
+        if (ImeTarget() && ImeTarget()->ImeInline()) return 0;
         break;
     case WM_IME_COMPOSITION:
-        if (focused_ && focused_->ImeInline()) {
+        if (ImeTarget() && ImeTarget()->ImeInline()) {
             HandleImeComposition(lparam);
             return 0;
         }
         SyncImeCaret();
         break;
     case WM_IME_ENDCOMPOSITION:
-        if (focused_ && focused_->ImeInline()) {
-            focused_->OnImeEnd();
-            SyncImeCaret();
+        if (ImeTarget() && ImeTarget()->ImeInline()) {
+            const auto port = port_;
+            ImeTarget()->OnImeEnd();
+            if (port->target.load(std::memory_order_acquire)) SyncImeCaret();
             return 0;
         }
         break;
@@ -1023,7 +1147,10 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         break;
     }
     case WM_SETFOCUS:
-        SyncImeCaret();
+        OnHwndFocus(true);
+        break;
+    case WM_KILLFOCUS:
+        OnHwndFocus(false);
         break;
     case WM_SETCURSOR:
         if (LOWORD(lparam) == HTCLIENT) {
@@ -1061,6 +1188,7 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         DestroyWindow(hwnd_);
         return 0;
     case WM_DESTROY:
+        PopupWindow::OwnerDestroyed(this);
         UiaShutdown();
         if (active_busy_) CloseBusy();
         if (active_drawer_) FinishDrawer();
@@ -1073,9 +1201,17 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         closed_ = true;
         animating_ = false;
         hwnd_ = nullptr;
-        if (--g_live_windows <= 0) PostQuitMessage(0);   // 最后一个窗口已关，让 App::Run 返回
+        // 最后一个窗口已关，让 App::Run 返回。宿主模式下消息泵属于宿主，WM_QUIT 会把宿主带走。
+        if (--g_live_windows <= 0 && !App::HostMode()) PostQuitMessage(0);
+        if (api_) api_->destroyed_.Emit();
         return 0;
     case WM_TIMER:
+        if (static_cast<UINT_PTR>(wparam) == kToastWakeTimerId) {
+            KillTimer(hwnd_, kToastWakeTimerId);
+            toast_wake_armed_ = false;
+            Invalidate();
+            return 0;
+        }
         FireTimer(static_cast<UINT_PTR>(wparam));
         return 0;
     case WM_SETTINGCHANGE:
@@ -1131,6 +1267,8 @@ void WindowImpl::UpdateClientSize() {
 
 void WindowImpl::RefreshTheme() {
     theme_ = MakeTheme(glow_intensity_);
+    if (motion_mode_ != MotionMode::System)
+        theme_.motion_scale = motion_mode_ == MotionMode::Off ? 0.0f : (motion_mode_ == MotionMode::Reduced ? 0.5f : 1.0f);
     backdrop_cache_dirty_ = true;
     Invalidate();
 }
@@ -1161,17 +1299,31 @@ void WindowImpl::Resize(Size client_size) {
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+Size WindowImpl::MeasureContent(float client_width) {
+    Control& root_control = *root_;
+    root_control.AssertUiThread();
+    if (!std::isfinite(client_width) || client_width <= 0.0f) return {};
+    // 探测会更新子树 desired_；先标记重排，即使测量异常也不能复用探测缓存。
+    RequestRelayout();
+    const Theme root_theme = root_control.EffectiveTheme(theme_);
+    Size desired = root_control.Measure({client_width, 1.0e5f}, root_theme);
+    desired.h += CaptionHeight();
+    return desired;
+}
+
 void WindowImpl::MinSize(Size min_size) {
     min_size_dip_ = min_size;
 }
 
 void WindowImpl::Invalidate() {
+    PopupWindow::OwnerInvalidated(this);
     dirty_full_ = true;
     dirty_count_ = 0;
     RequestPaint();
 }
 
 void WindowImpl::InvalidateRegion(const Rect& dip) {
+    PopupWindow::OwnerInvalidated(this);
     if (dirty_full_) {
         RequestPaint();
         return;
@@ -1181,6 +1333,13 @@ void WindowImpl::InvalidateRegion(const Rect& dip) {
 }
 
 void WindowImpl::RequestPaint() {
+    if (UpdateScope::Active()) {
+        UpdateScope::Defer(port_.get(), [port = port_] {
+            if (auto hwnd = static_cast<HWND>(port->target.load(std::memory_order_acquire)))
+                InvalidateRect(hwnd, nullptr, FALSE);
+        });
+        return;
+    }
     if (painting_) {
         paint_again_ = true;
         return;
@@ -1237,7 +1396,10 @@ void WindowImpl::AddDirtyRect(Rect dip) {
     dirty_count_ = 1;
 }
 
-void WindowImpl::RequestRelayout() {
+void WindowImpl::RequestRelayout(const wchar_t* reason) {
+    layout_reason_ = reason;
+    ++layout_requests_;
+    PopupWindow::OwnerInvalidated(this, true);
     layout_dirty_ = true;
     Invalidate();
 }
@@ -1281,7 +1443,7 @@ void WindowImpl::LoadFirstExeIcon() {
         bool taken = false;
     } ctx{this, false};
     EnumResourceNamesW(
-        GetModuleHandleW(nullptr), RT_GROUP_ICON,
+        LumenModule(), RT_GROUP_ICON,
         [](HMODULE, LPCWSTR, LPWSTR name, LONG_PTR param) -> BOOL {
             auto* ctx = reinterpret_cast<First*>(param);
             if (!ctx || !ctx->self || ctx->taken) return FALSE;
@@ -1312,7 +1474,7 @@ void WindowImpl::SetIconMemory(std::span<const std::byte> ico) {
 }
 
 void WindowImpl::SetIcon(int resource_id) {
-    HMODULE mod = GetModuleHandleW(nullptr);
+    HMODULE mod = LumenModule();
     if (HRSRC src = FindResourceW(mod, MAKEINTRESOURCEW(resource_id), RT_RCDATA)) {
         if (HGLOBAL mem = LoadResource(mod, src)) {
             const DWORD bytes = SizeofResource(mod, src);
@@ -1339,7 +1501,7 @@ void WindowImpl::SetIcon(std::wstring_view path_or_name) {
     std::wstring name(path_or_name);
     const bool file = name.find(L'\\') != std::wstring::npos || name.find(L'/') != std::wstring::npos ||
                       (name.size() >= 4 && (name.ends_with(L".ico") || name.ends_with(L".ICO")));
-    HMODULE mod = file ? nullptr : GetModuleHandleW(nullptr);
+    HMODULE mod = file ? nullptr : LumenModule();
     auto load = [&](int cx, int cy) -> HICON {
         return reinterpret_cast<HICON>(LoadImageW(mod, name.c_str(), IMAGE_ICON, cx, cy,
                                                   file ? LR_LOADFROMFILE | LR_DEFAULTCOLOR
@@ -1361,31 +1523,105 @@ void DumpControl(std::wostream& out, Control* node, int indent) {
     wchar_t wide[256]{};
     MultiByteToWideChar(CP_ACP, 0, raw, -1, wide, 256);
     const Rect& r = node->AbsoluteBounds();
+    const Size desired = node->DesiredSize(), minimum = node->MinSize(), maximum = node->MaxSize();
+    const auto margin = node->Margin();
     out << wide << L" vis=" << (node->Visible() ? 1 : 0) << L" en=" << (node->Enabled() ? 1 : 0)
         << L" focus=" << (node->HasFocus() ? 1 : 0) << L" [" << r.x << L"," << r.y << L" "
-        << r.w << L"x" << r.h << L"]\n";
+        << r.w << L"x" << r.h << L"] desired=" << desired.w << L"x" << desired.h
+        << L" min=" << minimum.w << L"x" << minimum.h << L" max=" << maximum.w << L"x" << maximum.h
+        << L" margin=" << margin.left << L"," << margin.top << L"," << margin.right << L"," << margin.bottom
+        << L" name=\"" << node->AccessibleName() << L"\"\n";
     if (Panel* panel = node->AsPanel()) {
+        if (panel->ClipChildren()) {
+            const Rect clip = panel->ChildrenClipBounds();
+            out << std::wstring(static_cast<size_t>(indent + 1) * 2, L' ') << L"clip=["
+                << clip.x << L"," << clip.y << L" " << clip.w << L"x" << clip.h << L"]\n";
+        }
         for (size_t i = 0; i < panel->ChildCount(); ++i) DumpControl(out, &panel->Child(i), indent + 1);
     }
 }
 } // namespace
 
 void WindowImpl::DumpTree(std::wostream& out) const {
-    out << L"Window\n";
+    out << L"Window dpi=" << scale_ * 96.0f << L" layout-pending=" << layout_dirty_
+        << L" requests=" << layout_requests_ << L" reason=" << layout_reason_ << L"\n";
+    out << L"Focus path (leaf to root):";
+    for (Control* node = focused_; node; node = UiaParentOf(node))
+        out << L" / " << node->AccessibleName() << L"@" << static_cast<const void*>(node);
+    out << L"\n";
     if (title_bar_) DumpControl(out, title_bar_.get(), 1);
     if (root_) DumpControl(out, root_.get(), 1);
 }
 
-void WindowImpl::RunWorker(std::function<void()> work, std::function<void()> then) {
-    auto alive = std::weak_ptr<void>(keep_alive_);
-    std::thread([this, work = std::move(work), then = std::move(then), alive]() mutable {
-        if (work) work();
-        if (alive.expired()) return;
-        Post([then = std::move(then), alive] {
-            if (alive.expired()) return;
-            if (then) then();
-        });
-    }).detach();
+namespace {
+// 异常消息 what()（通常 UTF-8/ANSI）转宽字符；失败时降级逐字符拷贝。
+std::wstring ExceptionMessage(const std::string& what) {
+    if (what.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, what.c_str(), -1, nullptr, 0);
+    if (n <= 1) return {what.begin(), what.end()};
+    std::wstring wide(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, what.c_str(), -1, wide.data(), n);
+    wide.resize(static_cast<size_t>(n) - 1);
+    return wide;
+}
+} // namespace
+
+TaskHandle WindowImpl::RunWorker(std::function<void(const TaskHandle&)> work,
+                                 std::function<void()> then, std::wstring_view busy) {
+    auto status = std::make_shared<TaskStatusBox>();
+    auto port = port_;
+    if (!busy.empty()) busy_task_ = status;
+    struct DeliveryReceipt {
+        std::shared_ptr<TaskStatusBox> state;
+        ~DeliveryReceipt() {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            if (state->delivery == TaskDelivery::Pending) state->delivery = TaskDelivery::Dropped;
+        }
+    };
+    AppStartWorker([this, status, port, work = std::move(work), then = std::move(then),
+                    has_busy = !busy.empty()]() mutable {
+        TaskStatus outcome = TaskStatus::Succeeded;
+        std::wstring error;
+        try {
+            if (work) work(TaskHandle(status));
+        } catch (const TaskCancelled&) {
+            outcome = TaskStatus::Cancelled;
+        } catch (const std::exception& e) {
+            outcome = TaskStatus::Failed;
+            error = ExceptionMessage(e.what());
+        } catch (...) {
+            outcome = TaskStatus::Failed;
+        }
+        {
+            std::lock_guard<std::mutex> lock(status->mutex);
+            status->error = error;
+            status->status = outcome;   // 唯一工作终态，后续投递失败不再覆盖。
+        }
+        try {
+            auto receipt = std::make_shared<DeliveryReceipt>();
+            receipt->state = status;
+            port->Post([this, receipt, then = std::move(then), outcome, error, has_busy] {
+                auto state = receipt->state;
+                {
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    state->delivery = TaskDelivery::Delivered;
+                }
+                if (has_busy && busy_task_ == state) { busy_task_.reset(); CloseBusy(); }
+                if (outcome == TaskStatus::Succeeded) { if (then) then(); }
+                else if (outcome == TaskStatus::Failed) EmitTaskFailed(error);
+            });
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(status->mutex);
+            status->delivery = TaskDelivery::Dropped;
+        }
+    });
+    return TaskHandle(std::move(status));
+}
+
+void WindowImpl::EmitTaskFailed(const std::wstring& what) {
+    if (!what.empty()) Log(L"RunAsync failed: %s", what.c_str());
+    else Log(L"RunAsync failed: unknown exception");
+    if (api_) api_->task_failed_.Emit(std::wstring_view(what));
 }
 
 LumaTextBridge* WindowImpl::LumaOf(Window* window) {
@@ -1418,6 +1654,16 @@ void WindowImpl::GlowIntensity(float intensity) {
     if (glow_intensity_ == intensity) return;
     glow_intensity_ = Clamp(intensity, 0.0f, 1.0f);
     RefreshTheme();
+}
+
+void WindowImpl::PerfHud(bool on) {
+    if (perf_hud_on_ == on) return;
+    perf_hud_on_ = on;
+    perf_hud_[0] = L'\0';
+    fps_ema_ = 0.0f;
+    last_hud_qpc_ = {};
+    if (!on && title_bar_) title_bar_->Status({});
+    Invalidate();
 }
 
 void WindowImpl::SetBackdrop(Backdrop backdrop) {
@@ -1555,7 +1801,9 @@ void WindowImpl::BindWindowRecursive(Control* tree, Window* window) {
 
 void WindowImpl::RegisterOleDrop() {
     if (ole_drop_ || !hwnd_) return;
+    // S_OK/S_FALSE 都要配对 OleUninitialize（宿主线程可能已初始化 OLE，只是加了引用）。
     if (FAILED(OleInitialize(nullptr))) return;
+    ole_initialized_ = true;
     ole_drop_ = new OleDropTarget(this);
     if (FAILED(RegisterDragDrop(hwnd_, ole_drop_))) {
         ole_drop_->Release();
@@ -1564,12 +1812,17 @@ void WindowImpl::RegisterOleDrop() {
 }
 
 void WindowImpl::UnregisterOleDrop() {
-    if (!ole_drop_) return;
-    if (hwnd_) RevokeDragDrop(hwnd_);
-    ole_drop_->Detach();
-    ole_drop_->Release();
-    ole_drop_ = nullptr;
-    SetDropArmed(nullptr);
+    if (ole_drop_) {
+        if (hwnd_) RevokeDragDrop(hwnd_);
+        ole_drop_->Detach();
+        ole_drop_->Release();
+        ole_drop_ = nullptr;
+        SetDropArmed(nullptr);
+    }
+    if (ole_initialized_) {
+        ole_initialized_ = false;
+        OleUninitialize();
+    }
 }
 
 Point WindowImpl::DipFromScreen(long screen_x, long screen_y) const {
@@ -1622,6 +1875,7 @@ void WindowImpl::ForgetTree(Control* tree) {
 
 
 void WindowImpl::ForgetControl(const Control* control) {
+    PopupWindow::ForgetControl(this, control);
     UiaForget(control);
     if (hovered_ == control) hovered_ = nullptr;
     if (captured_ == control) {
@@ -1631,6 +1885,7 @@ void WindowImpl::ForgetControl(const Control* control) {
         if (hwnd_ && GetCapture() == hwnd_) ReleaseCapture();
     }
     if (focused_ == control) focused_ = nullptr;
+    if (focus_restore_ == control) focus_restore_ = nullptr;
     if (tooltip_control_ == control) {
         tooltip_control_ = nullptr;
         tooltip_custom_ = nullptr;
@@ -1680,13 +1935,8 @@ void WindowImpl::ForgetControl(const Control* control) {
 
 
 
-void WindowImpl::Post(std::function<void()> fn) {
-    if (!fn) return;
-    {
-        std::lock_guard<std::mutex> lock(post_mutex_);
-        post_queue_.push_back(std::move(fn));
-    }
-    if (hwnd_) PostMessageW(hwnd_, kWmPost, 0, 0);
+PostResult WindowImpl::Post(std::function<void()> fn) {
+    return port_->Post(std::move(fn));
 }
 
 bool WindowImpl::IsUiThread() const noexcept {
@@ -1695,11 +1945,11 @@ bool WindowImpl::IsUiThread() const noexcept {
 
 void WindowImpl::DrainPosted() {
     std::deque<std::function<void()>> batch;
-    {
-        std::lock_guard<std::mutex> lock(post_mutex_);
-        batch.swap(post_queue_);
-    }
+    // 端口空时本次唤醒可能来自竞态窗口（如 Close 后的残留消息），直接返回。
+    auto port = port_;
+    if (!port->TryDrain(batch)) return;
     for (auto& fn : batch) {
+        if (!port->target.load(std::memory_order_acquire)) break;
         if (fn) fn();
     }
 }
@@ -1838,6 +2088,7 @@ void WindowImpl::Layout() {
                                busy_h});
     }
     LayoutFlyout();
+    PopupWindow::OwnerMessage(this, WM_WINDOWPOSCHANGED, 0);
     SyncImeCaret();
 }
 
@@ -1871,10 +2122,21 @@ void WindowImpl::Paint() {
         renderer_.Resize(client_w_, client_h_);
         if (renderer_.NeedsRecovery() || !renderer_.Ready()) return;
     }
+    if (busy_task_) {
+        bool dropped = false;
+        { std::lock_guard<std::mutex> lock(busy_task_->mutex);
+          dropped = busy_task_->delivery == TaskDelivery::Dropped; }
+        if (dropped) { busy_task_.reset(); CloseBusy(); }
+    }
     painting_ = true;
     LARGE_INTEGER t_frame{};
     QueryPerformanceCounter(&t_frame);
     bool more = false;
+    // 隐藏期间保留暂停的目标；重新显示导致的第一帧恢复调度，不累积隐藏时长。
+    if (!animating_ && !anim_targets_.empty()) {
+        QueryPerformanceCounter(&last_tick_);
+        animating_ = true;
+    }
     if (animating_) more = TickAnimations();
     if (more) {
         for (Control* current : anim_targets_) {
@@ -1955,9 +2217,8 @@ void WindowImpl::Paint() {
         if (acrylic) painter_.CaptureAcrylic();
     }
     if (acrylic) {
-        constexpr float kSigma = 16.0f;
         const float t = AcrylicAmount();
-        painter_.DrawAcrylic(client, kSigma * t, AcrylicDim() * t);
+        painter_.DrawAcrylic(client, AcrylicSigma() * t, AcrylicDim() * t);
     }
     if (active_drawer_) DrawTree(active_drawer_);
     if (active_flyout_) DrawTree(active_flyout_);
@@ -1965,8 +2226,10 @@ void WindowImpl::Paint() {
     if (active_busy_) DrawTree(active_busy_);
     DrawToasts(painter_, theme_, client);
     DrawTooltip(painter_, theme_, client);
-    if (clip_partial) painter_.PopClip();
+    // 标题栏必须受脏区裁剪：局部重绘若把整条标题栏画到裁剪外，半透明像素会
+    // 反复叠进位图却不呈现；下一次全量呈现（如 flyout 开/关）时便闪现脏帧。
     DrawCaption(client);
+    if (clip_partial) painter_.PopClip();
     painter_.EndFrame();
     const float draw_ms = QpcMs(t_draw, qpc_freq_);
     LARGE_INTEGER t_present{};
@@ -1975,7 +2238,7 @@ void WindowImpl::Paint() {
                                              full ? nullptr : dirty_px, full ? 0 : dirty_n);
     const float present_ms = QpcMs(t_present, qpc_freq_);
     const float frame_ms = QpcMs(t_frame, qpc_freq_);
-    if (frame_ == Frame::Client) {
+    if (perf_hud_on_ && frame_ == Frame::Client) {
         const bool first_hud = perf_hud_[0] == L'\0';
         UpdatePerfHud(draw_ms, present_ms, frame_ms, full, dirty_n);
         if (first_hud) paint_again_ = true;
@@ -2014,9 +2277,14 @@ bool WindowImpl::TickAnimations() {
     }
     for (size_t i = 0; i < anim_targets_.size(); ++i) {
         Control* current = anim_targets_[i];
-        if (!current || !current->visible_) {
-            if (current) current->anim_listed_ = false;
-            continue;
+        if (!current) continue;
+        bool visible = IsWindowVisible(hwnd_) && !IsIconic(hwnd_);
+        for (Control* node = current; visible && node; node = node->parent_) {
+            visible = node->visible_;
+        }
+        if (!visible) {
+            anim_targets_[keep++] = current;
+            continue;   // 暂停而非丢弃；不请求下一帧，重新显示后可继续。
         }
         if (current->OnAnimate(dt)) {
             more = true;

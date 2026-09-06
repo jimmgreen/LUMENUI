@@ -106,7 +106,8 @@ Size FileDropZone::Measure(Size available, const Theme&) {
 
 bool FileDropZone::OnAnimate(float dt) {
     const bool more = EaseTo(armed_t_, armed_ ? 1.0f : 0.0f, dt);
-    return more || Control::OnAnimate(dt);
+    const bool base = Control::OnAnimate(dt);
+    return more || base;
 }
 
 void FileDropZone::Draw(Painter& painter, const Theme& theme) {

@@ -325,6 +325,12 @@ GridPlan BindGrid(LayoutScratch& scratch) {
 } // namespace
 
 Size Grid::Measure(Size available, const Theme& theme) {
+    if (min_column_width_ > 0.0f && AxisFinite(available.w)) {
+        int count = std::max(1, static_cast<int>((available.w - padding_h_ * 2.0f + gap_x_) /
+                                               (min_column_width_ + gap_x_)));
+        if (max_columns_ > 0) count = std::min(count, max_columns_);
+        tracks_.assign(static_cast<size_t>(count), 1.0f);
+    }
     if (tracks_.empty()) tracks_.assign(1, 1.0f);
     ScratchScope scratch;
     GridPlan plan = BindGrid(scratch.s);

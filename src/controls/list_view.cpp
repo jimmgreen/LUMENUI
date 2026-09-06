@@ -556,7 +556,7 @@ bool ListView::OnAnimate(float dt_seconds) {
         }
     }
     if (mut_kind_ != MutKind::None) {
-        if (mut_tween_.Tick(dt_seconds)) {
+        if (AdvanceAnimation(mut_tween_, dt_seconds)) {
             moving = true;
             Invalidate();
         } else {
@@ -564,7 +564,8 @@ bool ListView::OnAnimate(float dt_seconds) {
             moving = true;
         }
     }
-    return moving || Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    return moving || base;
 }
 
 void ListView::BeginEnter() {
@@ -955,7 +956,7 @@ void ListView::OnMouseDown(Point local, uint32_t buttons) {
 }
 
 void ListView::OnMouseDoubleClick(Point local) {
-    if (RowAt(local) >= 0) activate_.Emit(selected_ >= 0 ? static_cast<size_t>(selected_) : 0);
+    if (!activate_on_click_ && RowAt(local) >= 0) activate_.Emit(selected_ >= 0 ? static_cast<size_t>(selected_) : 0);
 }
 
 void ListView::OnMouseMove(Point local, uint32_t buttons) {
@@ -1013,12 +1014,17 @@ void ListView::OnMouseMove(Point local, uint32_t buttons) {
     }
 }
 
-void ListView::OnMouseUp(Point, uint32_t) {
+void ListView::OnMouseUp(Point local, uint32_t) {
+    const ptrdiff_t clicked = activate_on_click_ && enabled_ && press_armed_ && !dragging_ &&
+        !swipe_dragging_ && !reorder_dragging_ && RowAt(local) == press_row_ &&
+        std::fabs(local.x - press_local_.x) < kDragSlop && std::fabs(local.y - press_local_.y) < kDragSlop
+        ? press_row_ : -1;
     dragging_ = false;
     if (swipe_dragging_) EndSwipe();
     else if (reorder_dragging_) EndReorder();
     else ResetPress();
     Animate();
+    if (clicked >= 0) activate_.Emit(static_cast<size_t>(clicked));
 }
 
 void ListView::OnMouseLeave() {
@@ -1153,14 +1159,17 @@ void ListView::Draw(Painter& painter, const Theme& theme) {
         const std::wstring& glyph = draw_glyph_;
         const std::wstring& text = draw_text_;
         float text_x = shifted.x + 12.0f;
-        if (!glyph.empty()) {
+        if (item_icon_) {
+            item_icon_(data, painter, theme, {text_x, shifted.y + (shifted.h - 24.0f) * 0.5f, 24.0f, 24.0f});
+            text_x += 32.0f;
+        } else if (!glyph.empty()) {
             painter.DrawIcon(glyph, {text_x, shifted.y, 16.0f, shifted.h}, 16.0f,
                              Fade(theme.text_secondary, alpha));
             text_x += 26.0f;
         }
         if (!text.empty()) {
             painter.DrawText(text, {text_x, shifted.y, shifted.Right() - 12.0f - text_x, shifted.h},
-                             TextRole::Body, Fade(theme.text, alpha));
+                             item_text_role_, Fade(theme.text, alpha));
         }
     };
 
@@ -1220,7 +1229,7 @@ void ListView::Draw(Painter& painter, const Theme& theme) {
                                     groups_[g].expanded ? 0.0f : -90.0f, theme.text_secondary, 1.4f);
                 painter.DrawText(groups_[g].title,
                                  {header.x + 30.0f, header.y, header.w - 42.0f, header.h},
-                                 TextRole::CaptionStrong, theme.text_secondary);
+                                 group_text_role_, theme.text_secondary);
                 if (focused_ && focus_group_ == static_cast<ptrdiff_t>(g))
                     PaintFocusRing(painter, theme, header.Inset(4.0f, 2.0f), 6.0f);
             }
@@ -1251,7 +1260,7 @@ void ListView::Draw(Painter& painter, const Theme& theme) {
             painter.DrawChevron({header.x + 16.0f, header.y + header.h * 0.5f}, 10.0f,
                                 group.expanded ? 0.0f : -90.0f, theme.text_secondary, 1.4f);
             painter.DrawText(group.title, {header.x + 30.0f, header.y, header.w - 42.0f, header.h},
-                             TextRole::CaptionStrong, theme.text_secondary);
+                             group_text_role_, theme.text_secondary);
         }
         paint_drop();
     };

@@ -208,6 +208,8 @@ float TextBox::PadTop() const {
 float TextBox::PadRight() const { return kPadX; }
 
 float TextBox::LineHeight() const {
+    std::optional<FontFamilyScope> family_guard;
+    if (!family_.empty()) family_guard.emplace(family_);
     // 与 Painter::DrawTextWrapped / MeasureWrappedHeight 同一探针，避免行高漂移导致点选错位。
     return std::max(MeasureText(L"m4B", ContentRole()).h, 18.0f);
 }
@@ -227,7 +229,24 @@ float TextBox::ContentWidth() const {
 }
 
 TextBox& TextBox::Text(std::wstring_view value) {
-    ClearCompose();
+    // 同值同步直接返回：不清 IME 组合、不动光标/选区/滚动/撤销栈（外部双向绑定反复
+    // 回写同值时不得打断正在编辑的草稿）。重置整个编辑文档才走下方完整流程。
+    if (text_ == value) return *this;
+    return ResetDocument(value);
+}
+
+TextSyncResult TextBox::SyncText(std::wstring_view value, uint64_t expected_revision) {
+    if (text_ == value) return TextSyncResult::Unchanged;
+    if (revision_ != expected_revision || Composing() || (HasFocus() && !undo_.empty()))
+        return TextSyncResult::Conflict;
+    ResetDocument(value);
+    return TextSyncResult::Applied;
+}
+
+TextBox& TextBox::ResetDocument(std::wstring_view value) {
+    ++revision_;
+    const bool ending = ime_session_;
+    ClearCompose(false);
     text_.assign(value);
     pending_high_surrogate_ = 0;
     if (password_) multiline_ = false;
@@ -237,7 +256,12 @@ TextBox& TextBox::Text(std::wstring_view value) {
     redo_.clear();
     last_op_ = EditOp::None;
     RefreshMask();
+    ime_session_ = false;
+    WeakRef<TextBox> self(this);
+    NotifySelectionChanged();
+    if (!self) return *this;
     Invalidate();
+    if (ending) composing_changed_.Emit(false);
     return *this;
 }
 
@@ -306,6 +330,7 @@ const std::wstring& TextBox::VisibleText() const noexcept {
 }
 
 void TextBox::NotifyChanged() {
+    ++revision_;
     RefreshMask();
     last_op_tick_ = GetTickCount();
     text_changed_.Emit(text_);
@@ -341,6 +366,7 @@ bool TextBox::Undo() {
     caret_ = snap.caret;
     anchor_ = snap.anchor;
     NotifyChanged();
+    NotifySelectionChanged();
     NotifyImeCaret();
     last_op_ = EditOp::None;
     return true;
@@ -355,6 +381,7 @@ bool TextBox::Redo() {
     caret_ = snap.caret;
     anchor_ = snap.anchor;
     NotifyChanged();
+    NotifySelectionChanged();
     NotifyImeCaret();
     last_op_ = EditOp::None;
     return true;
@@ -375,7 +402,9 @@ void TextBox::OnFocusChanged(bool focused) {
     if (!focused) {
         pending_high_surrogate_ = 0;
         if (!ime_comp_.empty()) {
+            WeakRef<TextBox> self(this);
             ClearCompose();
+            if (!self) return;
             CancelOsIme(NativeWindow());
         }
     }
@@ -393,12 +422,16 @@ void TextBox::NotifyImeCaret() {
     if (window_ && focused_) WindowImpl::SyncImeCaret(window_);
 }
 
-void TextBox::ClearCompose() {
-    if (ime_comp_.empty() && ime_attr_.empty() && ime_cursor_ == 0) return;
+void TextBox::ClearCompose(bool notify) {
+    const bool ending = ime_session_;
     ime_comp_.clear();
     ime_attr_.clear();
     ime_cursor_ = 0;
     Invalidate();
+    if (notify) {
+        ime_session_ = false;
+        if (ending) composing_changed_.Emit(false);
+    }
 }
 
 float TextBox::VisualCaretX() const {
@@ -412,15 +445,21 @@ float TextBox::VisualCaretX() const {
 
 void TextBox::OnImeCompose(std::wstring_view text, size_t cursor, std::string_view attributes) {
     if (read_only_) return;
+    WeakRef<TextBox> self(this);
     if (text.empty()) {
         ClearCompose();
-        NotifyImeCaret();
+        if (self) NotifyImeCaret();
         return;
     }
+    const bool starting = !ime_session_;
+    ime_session_ = true;
     if (HasSelection()) {
         PushUndo();
         DeleteSelection();
         NotifyChanged();
+        if (!self) return;
+        NotifySelectionChanged();
+        if (!self) return;
     }
     ime_comp_.assign(text);
     ime_attr_.assign(attributes);
@@ -430,29 +469,39 @@ void TextBox::OnImeCompose(std::wstring_view text, size_t cursor, std::string_vi
     ScrollCaretIntoView();
     NotifyImeCaret();
     Invalidate();
+    if (starting) composing_changed_.Emit(true);
 }
 
 void TextBox::OnImeCommit(std::wstring_view text) {
-    ClearCompose();
+    const bool ending = ime_session_;
+    ClearCompose(false);
+    WeakRef<TextBox> self(this);
     if (read_only_ || text.empty()) {
         NotifyImeCaret();
+        ime_session_ = false;
+        if (ending) composing_changed_.Emit(false);
         return;
     }
     PushUndo();
     DeleteSelection();
     InsertText(text.data(), text.size());
     NotifyChanged();
+    if (!self) return;
     NotifyImeCaret();
+    ime_session_ = false;
+    if (ending) composing_changed_.Emit(false);
 }
 
 void TextBox::OnImeEnd() {
-    ClearCompose();
     NotifyImeCaret();
+    ClearCompose();
 }
 
 void TextBox::DrawComposition(Painter& painter, const Theme& theme, float x, float text_y,
                               float text_h, float band_y, float band_h) const {
     if (ime_comp_.empty()) return;
+    std::optional<FontFamilyScope> family_guard;
+    if (!family_.empty()) family_guard.emplace(family_);
     const Color color = enabled_ ? theme.text : theme.text_disabled;
     const std::wstring_view comp = ime_comp_;
     float acc = 0.0f;
@@ -499,6 +548,24 @@ void TextBox::DrawComposition(Painter& painter, const Theme& theme, float x, flo
 
 size_t TextBox::SelectionStart() const noexcept { return std::min(caret_, anchor_); }
 size_t TextBox::SelectionEnd() const noexcept { return std::max(caret_, anchor_); }
+
+TextBox& TextBox::Select(size_t start, size_t end) {
+    start = SnapTextElement(text_, std::min(start, text_.size()));
+    end = SnapTextElement(text_, std::min(end, text_.size()));
+    if (start > end) std::swap(start, end);
+    anchor_ = start;
+    caret_ = end;
+    caret_on_ = true;
+    blink_t_ = 0.0f;
+    // 新文本载入后优先从左端展示，避免选区末端把输入框滚到字符串尾部。
+    // 后续用户编辑或移动光标时仍由 ScrollCaretIntoView() 自动跟随光标。
+    scroll_x_ = 0.0f;
+    scroll_y_ = 0.0f;
+    NotifyImeCaret();
+    NotifySelectionChanged();
+    Invalidate();
+    return *this;
+}
 
 size_t TextBox::LineStart(size_t index) const {
     index = std::min(index, text_.size());
@@ -639,6 +706,8 @@ void TextBox::InsertMasked(wchar_t ch) {
 }
 
 float TextBox::CaretX(size_t index) const {
+    std::optional<FontFamilyScope> family_guard;
+    if (!family_.empty()) family_guard.emplace(family_);
     const std::wstring& shown = VisibleText();
     index = std::min(index, shown.size());
     if (!multiline_) {
@@ -651,6 +720,8 @@ float TextBox::CaretX(size_t index) const {
 }
 
 float TextBox::TextAdvance(std::wstring_view text) const {
+    std::optional<FontFamilyScope> family_guard;
+    if (!family_.empty()) family_guard.emplace(family_);
     if (text.empty()) return 0.0f;
     float x = 0.0f;
     if (window_ && WindowImpl::CaretXBody(window_, text, text.size(), &x, ContentRole())) return x;
@@ -718,6 +789,7 @@ void TextBox::SetCaret(size_t index, bool extend, bool scroll_to_caret) {
     blink_t_ = 0.0f;
     if (scroll_to_caret) ScrollCaretIntoView();
     NotifyImeCaret();
+    NotifySelectionChanged();
     Invalidate();
 }
 
@@ -726,6 +798,7 @@ void TextBox::DeleteSelection() {
     const size_t start = SelectionStart();
     text_.erase(start, SelectionEnd() - start);
     caret_ = anchor_ = start;
+    NotifySelectionChanged();
 }
 
 void TextBox::InsertText(const wchar_t* begin, size_t count) {
@@ -742,9 +815,12 @@ void TextBox::InsertText(const wchar_t* begin, size_t count) {
     if (n == 0) return;
     text_.insert(caret_, begin, n);
     caret_ = anchor_ = caret_ + n;
+    NotifySelectionChanged();
 }
 
 size_t TextBox::HitIndex(Point local) const {
+    std::optional<FontFamilyScope> family_guard;
+    if (!family_.empty()) family_guard.emplace(family_);
     const std::wstring& shown = VisibleText();
     const float x = local.x - PadLeft() + scroll_x_;
     if (!multiline_) {
@@ -1042,7 +1118,9 @@ void TextBox::OnMouseDown(Point local, uint32_t buttons) {
     }
     if (!(buttons & MK_LBUTTON)) return;
     if (!ime_comp_.empty()) {
+        WeakRef<TextBox> self(this);
         ClearCompose();
+        if (!self) return;
         CancelOsIme(NativeWindow());
     }
     Focus();
@@ -1161,6 +1239,8 @@ bool TextBox::OnAnimate(float dt_seconds) {
 }
 
 void TextBox::Draw(Painter& painter, const Theme& theme) {
+    std::optional<FontFamilyScope> family_guard;
+    if (!family_.empty()) family_guard.emplace(family_);
     const Rect frame = absolute_;
     if (PaintChrome()) {
         PaintField(painter, theme, frame, theme.radius_control, enabled_, focused_, hovered_);
@@ -1326,3 +1406,4 @@ TextBox& TextBox::BindText(Property<std::wstring>& p) {
 }
 
 } // namespace lumen
+

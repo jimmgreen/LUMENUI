@@ -1,0 +1,10 @@
+Built-in imagegen. Target: 03-eclipse.png. Color reference: 01-aurora.png.
+
+Use case: precise-object-edit / palette transfer.
+Image 1 is the EDIT TARGET: the champagne optical-glass solar-eclipse app icon.
+Image 2 is a COLOR REFERENCE ONLY: the aurora folded glass icon.
+Change ONLY the color palette of image 1 to match image 2. Preserve the exact eclipse silhouette, circular dark aperture, asymmetric thick glass crescent, upper-left glint, curved internal glass refractions, bottom trailing light wisp, rounded-square dark tile, camera, proportions, position, and framing of image 1.
+Replace all champagne/amber/gold/bronze colors with the refined cool aurora palette from image 2: clear mint/teal and luminous cyan on the left and lower-left edges, icy blue through the transparent middle volumes, gentle periwinkle and lavender-violet on the right and lower-right edges, tiny pale pink-peach highlights only where appropriate. Silver-white specular glints. The bottom light wisp and caustics follow the cyan-to-violet palette. Subtly cool the tile perimeter reflections to the same blue-lavender tones, keeping the tile dark neutral charcoal.
+Preserve convincing thick transparent GLASS with transmitted dark midtones and layered optical refraction, never opaque metallic chrome. Avoid oversaturating the entire glass; colors concentrate in refractions and curved edges as in image 2. No excessive white bloom.
+Do NOT copy the folded diamond shape from image 2. The subject must remain exactly the single circular eclipse of image 1. No letters, new objects, text, watermark, infinity shape, extra rings or composition changes.
+Output one polished square PNG matching the original target composition.

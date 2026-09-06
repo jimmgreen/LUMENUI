@@ -50,6 +50,8 @@ void Control::StealFrom(Control& o) noexcept {
     enabled_ = o.enabled_;
     accessible_name_ = std::move(o.accessible_name_);
     tooltip_ = std::move(o.tooltip_);
+    tooltip_delay_ = o.tooltip_delay_;
+    o.tooltip_delay_ = -1.0f;
     tooltip_content_ = std::move(o.tooltip_content_);
     context_menu_ = std::move(o.context_menu_);
     has_context_menu_ = o.has_context_menu_;
@@ -314,6 +316,12 @@ void Control::OnFocusChanged(bool focused) {
     Invalidate();
 }
 
+Connection Control::BindFocused(std::function<void(bool focused)> handler) {
+    if (!handler) return {};
+    if (!focused_signal_) focused_signal_ = std::make_shared<Signal<bool>>();
+    return focused_signal_->Connect(std::move(handler));
+}
+
 Control& Control::Spotlight(bool enabled) {
     if (spotlight_enabled_ == enabled) return *this;
     spotlight_enabled_ = enabled;
@@ -356,7 +364,12 @@ bool Control::EaseTo(float& value, float target, float dt, float speed, float ep
         value = target;
         return false;
     }
-    return ::lumen::EaseTo(value, target, dt, speed, epsilon);
+    return ::lumen::EaseTo(value, target, dt / MotionScale(), speed, epsilon);
+}
+
+bool Control::AdvanceAnimation(Tween& tween, float dt) const noexcept {
+    if (MotionScale() <= 0.001f) { tween.Snap(tween.to); return false; }
+    return tween.Tick(dt);
 }
 
 void Control::PaintFocusRing(Painter& painter, const Theme& theme, const Rect& r,
@@ -394,6 +407,11 @@ void Control::RelayoutParent() {
 
 Control& Control::Focus() {
     if (window_) WindowImpl::SetFocusTo(window_, this);
+    return *this;
+}
+
+Control& Control::Blur() {
+    if (window_ && focused_) window_->ClearFocus();
     return *this;
 }
 
@@ -553,7 +571,9 @@ Panel& Panel::Card(CardStyle style, float radius) {
     card_style_ = style;
     card_radius_ = radius;
     use_card_style_ = true;
-    if (style == CardStyle::Lumen) Spotlight(true);
+    // Lumen 与 Subtle 卡默认追光：分区卡是页面主要承载面，统一光感；
+    // 个别卡片不要光用 Card(...).Spotlight(false) 退掉。
+    if (style == CardStyle::Lumen || style == CardStyle::Subtle) Spotlight(true);
     Invalidate();
     return *this;
 }
@@ -659,6 +679,12 @@ void Panel::Draw(Painter& painter, const Theme& theme) {
             return;
         case CardStyle::Subtle:
             painter.FillRoundedRect(absolute_, card_radius_, theme.fill_hover);
+            // 与 Lumen 卡同款追光：光斑渐显时控件下垫碳底挡光，描边最后压住边缘。
+            if (spotlight_t_ > 0.004f) {
+                DrawSpotlight(painter, theme, absolute_, card_radius_, SpotlightCenter(),
+                              spotlight_t_);
+                AvoidControls(painter, theme);
+            }
             painter.StrokeRoundedRect(absolute_, card_radius_, theme.stroke_card);
             return;
         case CardStyle::Flyout:

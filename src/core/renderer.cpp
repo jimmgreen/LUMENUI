@@ -24,12 +24,18 @@ bool Renderer::IsDeviceLost(HRESULT hr) noexcept {
 }
 
 bool Renderer::Init(HWND hwnd, int width_px, int height_px) {
+    // 重入（Recover、或 CreateWindow 期间的首次 Paint 抢在构造函数 Init 之前）必须先放掉
+    // 上一套设备链，否则窗口打开瞬间同时挂两套 D3D/DComp 设备，显存吃紧时第二套
+    // D3D11CreateDevice 会 E_OUTOFMEMORY 退化到 WARP。
+    ReleaseDeviceResources();
     hwnd_ = hwnd;
     width_ = width_px;
     height_ = height_px;
     device_lost_ = false;
-    ready_ = false;
+    // 没有 HWND 或客户区为空时建不出 DComp 目标 / 保留位图，不要白建整套设备。
+    if (!hwnd_ || width_ <= 0 || height_ <= 0) return false;
     ready_ = CreateDeviceResources();
+    if (!ready_) ReleaseDeviceResources();
     return ready_;
 }
 
@@ -39,13 +45,17 @@ bool Renderer::CreateDeviceResources() {
     HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, nullptr, 0,
                                    D3D11_SDK_VERSION, &d3d_, &feature_level, nullptr);
     bool warp = false;
+    const HRESULT hardware_hr = hr;
     if (FAILED(hr)) {
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, nullptr, 0,
                                D3D11_SDK_VERSION, &d3d_, &feature_level, nullptr);
         warp = SUCCEEDED(hr);
     }
     if (FAILED(hr)) return false;
-    if (warp) Log(LogLevel::Warn, L"D3D11 device is WARP");
+    if (warp) {
+        Log(LogLevel::Warn, L"D3D11 device is WARP (hardware hr=0x%08lx)",
+            static_cast<unsigned long>(hardware_hr));
+    }
 
     if (FAILED(d3d_->QueryInterface(IID_PPV_ARGS(&dxgi_)))) return false;
 
@@ -300,7 +310,6 @@ void Renderer::SetVisualTransform(const D2D1_MATRIX_3X2_F& matrix) {
 }
 
 bool Renderer::Recover() {
-    ReleaseDeviceResources();
     return Init(hwnd_, width_, height_);
 }
 

@@ -5,6 +5,9 @@
 #include "text_service.h"
 
 #include <windows.h>
+#if defined(_MSC_VER)
+#include <delayimp.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +24,10 @@
 #include <lumatext/lumatext.hpp>
 #endif
 
+#if !defined(LUMEN_LUMATEXT_DLL)
+#define LUMEN_LUMATEXT_DLL "lumatext.dll"
+#endif
+
 namespace lumen {
 namespace {
 
@@ -32,6 +39,50 @@ bool EnvironmentEnabled() noexcept {
            _wcsicmp(value, L"false") != 0;
 }
 
+std::wstring& LibraryOverride() {
+    static std::wstring path;
+    return path;
+}
+
+#if defined(LUMEN_HAS_LUMATEXT)
+HMODULE g_lumatext_module = nullptr;
+bool g_lumatext_probed = false;
+
+std::wstring DllFileName() {
+    const char* narrow = LUMEN_LUMATEXT_DLL;
+    return std::wstring(narrow, narrow + std::char_traits<char>::length(narrow));
+}
+
+// lumatext.dll 走 /DELAYLOAD：首次 lt_* 调用前必须保证模块已在进程内，否则延迟加载助手
+// 只按 exe 目录 / PATH 搜索（宿主进程里找不到 .arx 旁边的 DLL 就会抛 0xC06D007E）。
+// 已加载的同名模块会被 LoadLibrary 直接复用，所以先按完整路径把它带进来即可。
+bool EnsureLumaTextLoaded() {
+    if (g_lumatext_probed) return g_lumatext_module != nullptr;
+    const std::wstring file = DllFileName();
+    HMODULE module = nullptr;
+    if (!module && !LibraryOverride().empty()) {
+        module = LoadLibraryExW(LibraryOverride().c_str(), nullptr,
+                                LOAD_WITH_ALTERED_SEARCH_PATH);
+    }
+    if (!module) {
+        HMODULE self = nullptr;
+        wchar_t path[MAX_PATH]{};
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(&EnsureLumaTextLoaded), &self) &&
+            GetModuleFileNameW(self, path, ARRAYSIZE(path)) > 0) {
+            const std::filesystem::path candidate =
+                std::filesystem::path(path).parent_path() / file;
+            module = LoadLibraryExW(candidate.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        }
+    }
+    if (!module) module = LoadLibraryW(file.c_str());
+    g_lumatext_module = module;
+    g_lumatext_probed = true;
+    return module != nullptr;
+}
+#endif
+
 std::wstring FontPath(const wchar_t* file_name) {
     wchar_t windows[MAX_PATH]{};
     const UINT length = GetWindowsDirectoryW(windows, ARRAYSIZE(windows));
@@ -39,9 +90,14 @@ std::wstring FontPath(const wchar_t* file_name) {
     return (std::filesystem::path(windows) / L"Fonts" / file_name).wstring();
 }
 
+std::unordered_map<IDWriteTextFormat*, std::wstring>& FamilyCache() {
+    static std::unordered_map<IDWriteTextFormat*, std::wstring> cache;
+    return cache;
+}
+
 std::wstring_view FontFamily(IDWriteTextFormat* format) {
     if (!format) return {};
-    static std::unordered_map<IDWriteTextFormat*, std::wstring> cache;
+    auto& cache = FamilyCache();
     if (auto it = cache.find(format); it != cache.end()) return it->second;
     const UINT32 length = format->GetFontFamilyNameLength();
     if (length == 0 || length > 256) return {};
@@ -101,6 +157,7 @@ struct LumaTextBridge::Impl {
         std::size_t text_hash = 0;
         std::int32_t width_64 = 0;
         std::int32_t height_64 = 0;
+        DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING;
         // LumaText 字形缓存有 1/8 像素相位精度，表面键按 1/8（横向）与
         // 1/4（纵向）分桶，避免平滑滚动时每帧生成新命令列表。
         std::uint8_t x_phase_8 = 0;
@@ -121,6 +178,7 @@ struct LumaTextBridge::Impl {
             combine(std::hash<std::size_t>{}(key.text_hash));
             combine(std::hash<std::int32_t>{}(key.width_64));
             combine(std::hash<std::int32_t>{}(key.height_64));
+            combine(std::hash<int>{}(static_cast<int>(key.alignment)));
             combine(std::hash<std::uint32_t>{}(
                 static_cast<std::uint32_t>(key.x_phase_8) << 24 |
                 static_cast<std::uint32_t>(key.y_phase_8) << 16 |
@@ -503,7 +561,7 @@ struct LumaTextBridge::Impl {
     bool DrawOn(ID2D1DeviceContext* dc, std::wstring_view text, IDWriteTextFormat* format,
                 const D2D1_RECT_F& bounds, const D2D1_COLOR_F& foreground,
                 const D2D1_COLOR_F& background, float scale,
-                DWRITE_TEXT_ALIGNMENT alignment) {
+                DWRITE_TEXT_ALIGNMENT alignment, bool prepare = false) {
         if (!dc || busy || !renderer || !format || text.empty() ||
             format->GetFontStyle() != DWRITE_FONT_STYLE_NORMAL ||
             format->GetFontStretch() != DWRITE_FONT_STRETCH_NORMAL ||
@@ -574,6 +632,7 @@ struct LumaTextBridge::Impl {
             std::hash<std::wstring_view>{}(text),
             static_cast<std::int32_t>(std::lround(width * 64.0f)),
             static_cast<std::int32_t>(std::lround(height * 64.0f)),
+            alignment,
             x_phase_8,
             y_phase_4,
             packed_foreground,
@@ -585,11 +644,12 @@ struct LumaTextBridge::Impl {
             const auto offset = D2D1::Point2F(floor_x + phase_x - cached_phase_x,
                                               floor_y + phase_y - cached_phase_y);
             // 命令列表内已含文本裁剪，无需重复设置目标裁剪状态。
-            dc->DrawImage(cached->second.commands.Get(), &offset, nullptr,
-                          D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                          D2D1_COMPOSITE_MODE_SOURCE_OVER);
+            if (!prepare) dc->DrawImage(cached->second.commands.Get(), &offset, nullptr,
+                                       D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                                       D2D1_COMPOSITE_MODE_SOURCE_OVER);
             stats.surface_cache_hits++;
-            stats.draw_calls++;
+            if (prepare) stats.prepare_calls++;
+        else stats.draw_calls++;
             return true;
         }
         stats.surface_cache_misses++;
@@ -653,10 +713,11 @@ struct LumaTextBridge::Impl {
 
         const auto offset = D2D1::Point2F(floor_x + phase_x - cached_phase_x,
                                           floor_y + phase_y - cached_phase_y);
-        dc->DrawImage(commands.Get(), &offset, nullptr,
-                      D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-                      D2D1_COMPOSITE_MODE_SOURCE_OVER);
-        stats.draw_calls++;
+        if (!prepare) dc->DrawImage(commands.Get(), &offset, nullptr,
+                                   D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                                   D2D1_COMPOSITE_MODE_SOURCE_OVER);
+        if (prepare) stats.prepare_calls++;
+        else stats.draw_calls++;
         return true;
     }
 
@@ -776,11 +837,31 @@ struct LumaTextBridge::Impl {
 #endif
 };
 
+void LumaTextLibraryPath(std::wstring path) {
+    LibraryOverride() = std::move(path);
+}
+
+void LumaTextResetProcessCaches() noexcept {
+    FamilyCache().clear();
+#if defined(LUMEN_HAS_LUMATEXT)
+    // 调用方必须先销毁全部渲染器；先恢复 IAT，再归还预加载引用，支持同模块重启。
+#if defined(_MSC_VER)
+    __FUnloadDelayLoadedDLL2(LUMEN_LUMATEXT_DLL);
+#endif
+    if (g_lumatext_module && FreeLibrary(g_lumatext_module))
+        g_lumatext_module = nullptr;
+    g_lumatext_probed = g_lumatext_module != nullptr;
+#endif
+}
+
 LumaTextBridge::LumaTextBridge() = default;
 LumaTextBridge::~LumaTextBridge() = default;
 
 bool LumaTextBridge::Init(IDWriteFactory* dwrite, ID2D1RenderTarget* target) {
     if (!EnvironmentEnabled()) return false;
+#if defined(LUMEN_HAS_LUMATEXT)
+    if (!EnsureLumaTextLoaded()) return false;
+#endif
     Shutdown();
     impl_ = std::make_unique<Impl>();
     if (!impl_->Init(dwrite, target)) {
@@ -813,6 +894,17 @@ bool LumaTextBridge::Draw(std::wstring_view text, IDWriteTextFormat* format,
 bool LumaTextBridge::Measure(std::wstring_view text, IDWriteTextFormat* format, float& width,
                              float* height) {
     return impl_ && impl_->Measure(text, format, width, height);
+}
+
+bool LumaTextBridge::Prepare(std::wstring_view text, IDWriteTextFormat* format,
+                             const D2D1_RECT_F& bounds, const D2D1_COLOR_F& foreground,
+                             const D2D1_COLOR_F& background, float scale, DWRITE_TEXT_ALIGNMENT alignment) {
+#if defined(LUMEN_HAS_LUMATEXT)
+    return impl_ && impl_->DrawOn(impl_->target_dc.Get(), text, format, bounds, foreground, background, scale, alignment, true);
+#else
+    (void)text; (void)format; (void)bounds; (void)foreground; (void)background; (void)scale; (void)alignment;
+    return false;
+#endif
 }
 
 bool LumaTextBridge::HitTestPoint(std::wstring_view text, IDWriteTextFormat* format, float scale,

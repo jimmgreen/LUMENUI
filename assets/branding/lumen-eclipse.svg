@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>LUMEN — optical glass eclipse</title>
+  <desc>Original LUMEN eclipse identity translated into monochrome optical glass. Editable vector artwork with transparent outer corners.</desc>
+  <defs>
+    <linearGradient id="rim" x1="141" y1="70" x2="828" y2="951" gradientUnits="userSpaceOnUse"><stop stop-color="#eee"/><stop offset=".2" stop-color="#353535"/><stop offset=".5" stop-color="#080808"/><stop offset=".84" stop-color="#6a6a6a"/><stop offset="1" stop-color="#222"/></linearGradient>
+    <linearGradient id="tile" x1="210" y1="91" x2="744" y2="928" gradientUnits="userSpaceOnUse"><stop stop-color="#262626"/><stop offset=".4" stop-color="#0b0b0b"/><stop offset=".77" stop-color="#040404"/><stop offset="1" stop-color="#171717"/></linearGradient>
+    <linearGradient id="edge" x1="278" y1="201" x2="766" y2="807" gradientUnits="userSpaceOnUse"><stop stop-color="white" stop-opacity=".8"/><stop offset=".32" stop-color="white" stop-opacity=".09"/><stop offset=".64" stop-color="white" stop-opacity=".3"/><stop offset=".86" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity=".08"/></linearGradient>
+    <linearGradient id="crystal" x1="337" y1="246" x2="715" y2="767" gradientUnits="userSpaceOnUse"><stop stop-color="#eee" stop-opacity=".6"/><stop offset=".15" stop-color="#fff" stop-opacity=".06"/><stop offset=".4" stop-color="#ddd" stop-opacity=".03"/><stop offset=".61" stop-color="#fff" stop-opacity=".28"/><stop offset=".72" stop-color="#fff" stop-opacity=".94"/><stop offset=".82" stop-color="#aaa" stop-opacity=".3"/><stop offset=".93" stop-color="#fff" stop-opacity=".95"/><stop offset="1" stop-color="#fff" stop-opacity=".1"/></linearGradient>
+    <linearGradient id="lens" x1="362" y1="331" x2="689" y2="762" gradientUnits="userSpaceOnUse"><stop stop-color="white" stop-opacity=".01"/><stop offset=".55" stop-color="white" stop-opacity=".025"/><stop offset=".86" stop-color="white" stop-opacity=".24"/><stop offset="1" stop-color="white" stop-opacity=".6"/></linearGradient>
+    <radialGradient id="light"><stop stop-color="white" stop-opacity=".6"/><stop offset=".2" stop-color="white" stop-opacity=".15"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient>
+    <radialGradient id="smoke" cx=".35" cy=".28" r=".8"><stop stop-color="#191919"/><stop offset=".6" stop-color="#050505"/><stop offset="1" stop-color="#0b0b0b"/></radialGradient>
+    <filter id="blur" x="-60%" y="-60%" width="220%" height="220%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="11"/></filter>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3"/></filter>
+    <mask id="crescent"><rect width="1024" height="1024" fill="black"/><ellipse cx="522" cy="501" rx="257" ry="276" fill="white"/><ellipse cx="499" cy="481" rx="235" ry="256" fill="black"/></mask>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="192" fill="url(#rim)"/>
+  <rect x="69" y="69" width="886" height="886" rx="187" fill="#060606"/>
+  <rect x="74" y="74" width="876" height="876" rx="182" fill="url(#tile)" stroke="url(#edge)" stroke-width="1.5"/>
+  <g transform="rotate(14 512 512)">
+    <ellipse cx="564" cy="551" rx="252" ry="269" fill="black" opacity=".7" filter="url(#blur)"/>
+    <path d="M627 260C902 379 881 714 585 774C774 674 825 431 627 260Z" fill="url(#lens)"/>
+    <path d="M702 291C900 513 784 746 543 777C764 695 836 504 702 291Z" fill="url(#lens)" opacity=".55"/>
+    <ellipse cx="522" cy="501" rx="257" ry="276" stroke="url(#edge)" stroke-width="10" opacity=".5" filter="url(#blur)"/>
+    <ellipse cx="499" cy="481" rx="235" ry="256" fill="url(#smoke)"/>
+    <rect x="220" y="200" width="600" height="610" fill="url(#crystal)" mask="url(#crescent)"/>
+    <ellipse cx="522" cy="501" rx="257" ry="276" stroke="url(#edge)" stroke-width="2"/>
+    <ellipse cx="499" cy="481" rx="235" ry="256" stroke="url(#edge)" stroke-width="1.5"/>
+    <path d="M466 227C644 187 767 372 755 541C748 695 649 777 526 766C653 746 737 640 733 505C731 378 650 244 542 231" fill="url(#crystal)" opacity=".6"/>
+    <path d="M532 239C693 270 769 441 737 596C720 675 659 745 577 762" stroke="url(#edge)" stroke-width="2.5"/>
+    <path d="M718 391C793 584 675 783 522 764" stroke="white" stroke-opacity=".68" stroke-width="5" filter="url(#soft)"/>
+    <path d="M724 428C763 596 675 733 568 760" stroke="white" stroke-opacity=".92" stroke-width="2"/>
+    <path d="M477 233C373 236 288 314 270 432" stroke="white" stroke-opacity=".85" stroke-width="2.5"/>
+    <path d="M755 570C735 725 520 819 322 803C481 793 652 748 704 652" fill="url(#lens)"/>
+    <path d="M767 622C716 718 564 791 355 804" stroke="url(#edge)" stroke-width="1.6"/>
+    <ellipse cx="596" cy="745" rx="122" ry="45" fill="url(#light)" transform="rotate(-23 596 745)"/>
+  </g>
+</svg>

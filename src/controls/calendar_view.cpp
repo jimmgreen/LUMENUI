@@ -338,7 +338,8 @@ bool CalendarView::OnAnimate(float dt_seconds) {
     active |= EaseTo(chevron_r_, right_t, dt_seconds);
     active |= EaseTo(title_hover_t_, hover_title_ ? 1.0f : 0.0f, dt_seconds);
     active |= EaseTo(view_t_, static_cast<float>(mode_), dt_seconds, 14.0f);
-    return active || Control::OnAnimate(dt_seconds);
+    const bool base = Control::OnAnimate(dt_seconds);
+    return active || base;
 }
 
 void CalendarView::DrawDays(Painter& painter, const Theme& theme, float fade) {

@@ -256,10 +256,11 @@ bool TabControl::CloseTab(std::wstring_view id) {
 }
 
 bool TabControl::OnAnimate(float dt) {
-    if (!slide_.running) return Control::OnAnimate(dt);
-    const bool more = slide_.Tick(dt);
+    const bool base = Control::OnAnimate(dt);
+    if (!slide_.running) return base;
+    const bool more = AdvanceAnimation(slide_, dt);
     ApplyIndicator(slide_.Value());
-    return more || Control::OnAnimate(dt);
+    return more || base;
 }
 
 void TabControl::ShowOnlySelected() {

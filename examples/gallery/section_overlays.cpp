@@ -21,7 +21,7 @@ lumen::Button* g_plain_anchor = nullptr;
 void BuildOverlays(lumen::StackPanel& column, lumen::Window& window) {
     using namespace lumen;
     PageHead(column, L"Overlays",
-             L"Things that sit on top: dialog, flyout, teaching tip, tooltip, context menu.");
+             L"Things that sit on top: dialog, toast, flyout, teaching tip, tooltip, context menu.");
 
     auto& dialog = Sample(column, L"Dialog",
                           L"Content between title and footer. Enter = default, Esc = cancel. "
@@ -97,6 +97,61 @@ void BuildOverlays(lumen::StackPanel& column, lumen::Window& window) {
     drawer.Add<Button>(L"Open right drawer").OnClick([&window] {
         window.ShowDrawer(g_drawer, Edge::Right);
     });
+
+    auto& toast = Sample(column, L"Toast",
+                         L"Anchor to any edge (ToastPlacement / ToastMargin). The newest card "
+                         L"is in front, older ones collapse behind it. Hover expands the stack "
+                         L"and pauses the timers. Click a card to dismiss.");
+    auto& toast_row = toast.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
+    toast_row.Add<Button>(L"Event created", ButtonKind::Primary).OnClick([&window] {
+        ToastData data;
+        data.title = L"Event created";
+        data.text = L"Sunday, December 3 at 9:00 AM";
+        data.action = L"Undo";
+        data.on_action = [&window] { window.ShowToast(L"Event undone"); };
+        data.duration = 4.0f;
+        window.ShowToast(std::move(data));
+    });
+    toast_row.Add<Button>(L"Fire 3", ButtonKind::Standard).OnClick([&window] {
+        for (int i = 0; i < 3; ++i) {
+            window.SetTimeout(0.35f * static_cast<float>(i), [&window, i] {
+                ToastData data;
+                data.text = L"Scheduled task " + std::to_wstring(i + 1) + L" finished";
+                data.kind = i == 2 ? ToastKind::Success : ToastKind::Default;
+                window.ShowToast(std::move(data));
+            });
+        }
+    });
+    toast_row.Add<Button>(L"Persistent", ButtonKind::Subtle).OnClick([&window] {
+        ToastData data;
+        data.title = L"Update ready";
+        data.text = L"Restart to apply the new build.";
+        data.action = L"Restart";
+        data.on_action = [&window] { window.ShowToast(L"Restarting…"); };
+        data.duration = 0.0f;   // <=0：停留到点 × 或操作为止
+        window.ShowToast(std::move(data));
+    });
+    auto& place_row = toast.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
+    const std::pair<const wchar_t*, ToastPlacement> places[] = {
+        {L"Bottom right", ToastPlacement::BottomRight},
+        {L"Bottom center", ToastPlacement::BottomCenter},
+        {L"Bottom left", ToastPlacement::BottomLeft},
+        {L"Top right", ToastPlacement::TopRight},
+        {L"Top center", ToastPlacement::TopCenter},
+        {L"Top left", ToastPlacement::TopLeft},
+    };
+    for (const auto& [label, placement] : places) {
+        place_row.Add<Button>(label, ButtonKind::Subtle)
+            .SizeClass(ButtonSize::Small)
+            .OnClick([&window, placement, label] {
+                window.ToastPlacement(placement);
+                ToastData data;
+                data.text = std::wstring(L"Anchor → ") + label;
+                data.kind = ToastKind::Info;
+                data.duration = 1.6f;
+                window.ShowToast(std::move(data));
+            });
+    }
 
     auto& system = Sample(column, L"Window helpers",
                           L"Ctrl+S is BindShortcut. File dialogs are lumen::dialogs.");
@@ -180,6 +235,38 @@ void BuildOverlays(lumen::StackPanel& column, lumen::Window& window) {
 
     auto& tooltip = Sample(column, L"ToolTip",
                            L"String, custom tree, Closable(false). Hover and wait.");
+    auto& popup = Sample(column, L"Popup",
+                         L"Crosses the client area (own top-level window, menu channel). "
+                         L"Click outside / Esc closes; content calls ClosePopup() to accept.");
+    auto& popup_row = popup.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
+    auto& swatch_btn = popup_row.Add<Button>(L"Pick gray");
+    static lumen::StackPanel* g_swatch_panel = nullptr;
+    if (!g_swatch_panel) {
+        // 色板内容树：调用方持有（与 Flyout 同模式），首次构建后复用。
+        auto panel = std::make_unique<lumen::StackPanel>();
+        panel->Spacing(6.0f);
+        panel->Add<Label>(L"GRAY RAMP", lumen::TextRole::CaptionStrong);
+        auto& row = panel->Add<lumen::Row>().Spacing(6.0f);
+        static const lumen::Color kGrays[] = {
+            lumen::Color::Hex(0x0D0D0D), lumen::Color::Hex(0x1F1F1F),
+            lumen::Color::Hex(0x333333), lumen::Color::Hex(0x4D4D4D),
+            lumen::Color::Hex(0x666666), lumen::Color::Hex(0x8C8C8C),
+            lumen::Color::Hex(0xB3B3B3), lumen::Color::Hex(0xE6E6E6)};
+        for (const lumen::Color& g : kGrays) {
+            row.Add<lumen::ColorSwatch>(g).OnPicked([&window, g] {
+                const int pct = static_cast<int>(g.r * 100.0f + 0.5f);
+                window.ShowToast(L"Picked gray " + std::to_wstring(pct) + L"%");
+                window.ClosePopup();   // 内容回调里收起自己
+            });
+        }
+        g_swatch_panel = panel.release();
+    }
+    swatch_btn.OnClick([&window, &swatch_btn] {
+        window.ShowPopup(*g_swatch_panel, &swatch_btn, 260.0f, [&window] {
+            window.ShowToast(L"Popup closed");
+        });
+    });
+
     auto& tip_btns = tooltip.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
     auto& primary = tip_btns.Add<Button>(L"Custom tip", ButtonKind::Primary);
     auto custom = std::make_unique<ToolTip>();

@@ -2,13 +2,13 @@
 #include "lumen/Panel.h"
 #include "lumen/Painter.h"
 #include "../core/text_service.h"
+#include "../core/window_impl.h"
 
 namespace lumen {
 namespace {
 constexpr float kPad = 4.0f;
 constexpr float kItemPadX = 16.0f;
 constexpr float kItemRadius = 8.0f;
-constexpr float kSlideSeconds = 0.6f;
 } // namespace
 
 void Segmented::RelayoutParent() { Control::RelayoutParent(); }
@@ -54,10 +54,12 @@ Segmented& Segmented::SelectedIndex(ptrdiff_t index) {
     selected_ = index;
     static const Theme kGeometry{};
     ItemSlot(static_cast<size_t>(selected_), thumb_to_x_, thumb_to_w_, kGeometry);
-    if (window_ && thumb_ready_) {
+    // 指示器走 duration_fast + 标准减速；motion_scale=0（系统关动画）或离屏直接到位。
+    const float dur = window_ ? WindowImpl::ThemeOf(window_).duration_fast * MotionScale() : 0.0f;
+    if (window_ && thumb_ready_ && dur > 0.001f) {
         thumb_from_x_ = thumb_x_;
         thumb_from_w_ = thumb_w_;
-        slide_.Play(0.0f, 1.0f, kSlideSeconds, Ease::Linear);
+        slide_.Play(0.0f, 1.0f, dur, Ease::CssEaseOut);
         Animate();
     } else {
         SnapThumb();
@@ -68,10 +70,14 @@ Segmented& Segmented::SelectedIndex(ptrdiff_t index) {
 }
 
 bool Segmented::OnAnimate(float dt) {
-    if (!slide_.running) return false;
-    const bool more = slide_.Tick(dt);
-    ApplyThumb(slide_.Value());
-    return more || Control::OnAnimate(dt);
+    bool more = false;
+    if (slide_.running) {
+        more = AdvanceAnimation(slide_, dt);
+        ApplyThumb(slide_.Value());
+    }
+    // 基类（聚光/焦点环）与指示器动画并行推进，不得被返回值短路。
+    more |= Control::OnAnimate(dt);
+    return more;
 }
 
 float Segmented::ItemWidth(size_t index, const Theme&) {

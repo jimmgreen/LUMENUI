@@ -5,6 +5,7 @@
 namespace lumen {
 
 Size Label::Measure(Size available, const Theme&) {
+    FontFamilyScope family(family_);
     if (text_.empty()) {
         if (role_ == TextRole::Display) return {0.0f, 56.0f};
         if (role_ == TextRole::Title) return {0.0f, 28.0f};
@@ -23,6 +24,7 @@ Size Label::Measure(Size available, const Theme&) {
 
 void Label::Draw(Painter& painter, const Theme& theme) {
     if (text_.empty()) return;
+    FontFamilyScope family(family_);
     Color color = theme.text;
     if (!enabled_) color = theme.text_disabled;
     else if (foreground_.a > 0.0f) color = foreground_;

@@ -1,16 +1,25 @@
 // ime_bridge.cpp — WindowImpl IME 组字、候选窗与插入符同步。
 #include "window_impl.h"
 #include "text_service.h"
+#include "popup_window.h"
 #include <algorithm>
 #include <imm.h>
 #include <string>
 
 namespace lumen {
 
+Control* WindowImpl::ImeTarget() const {
+    Control* popup = PopupWindow::Focused(const_cast<WindowImpl*>(this));
+    return popup ? popup : focused_;
+}
+
 bool WindowImpl::ImeClientCaret(POINT* caret_px, int* line_h_px, RECT* doc_px) const {
     Point dip{};
     float height_dip = 0.0f;
-    if (!focused_ || !focused_->ImeCaret(dip, height_dip)) return false;
+    Control* target = ImeTarget();
+    if (!target || !target->ImeCaret(dip, height_dip)) return false;
+    const Point offset = PopupWindow::Focused(const_cast<WindowImpl*>(this)) ? PopupWindow::OffsetInOwner(const_cast<WindowImpl*>(this)) : Point{};
+    dip.x += offset.x; dip.y += offset.y;
     if (caret_px) {
         caret_px->x = static_cast<LONG>(dip.x * scale_ + 0.5f);
         caret_px->y = static_cast<LONG>(dip.y * scale_ + 0.5f);
@@ -19,7 +28,8 @@ bool WindowImpl::ImeClientCaret(POINT* caret_px, int* line_h_px, RECT* doc_px) c
         *line_h_px = std::max(1, static_cast<int>(height_dip * scale_ + 0.5f));
     }
     if (doc_px) {
-        const Rect& box = focused_->AbsoluteBounds();
+        Rect box = target->AbsoluteBounds();
+        box.x += offset.x; box.y += offset.y;
         doc_px->left = static_cast<LONG>(box.x * scale_);
         doc_px->top = static_cast<LONG>(box.y * scale_);
         doc_px->right = static_cast<LONG>(box.Right() * scale_);
@@ -29,7 +39,9 @@ bool WindowImpl::ImeClientCaret(POINT* caret_px, int* line_h_px, RECT* doc_px) c
 }
 
 void WindowImpl::HandleImeComposition(LPARAM lparam) {
-    if (!hwnd_ || !focused_) return;
+    WeakRef<Control> target(ImeTarget());
+    if (!hwnd_ || !target) return;
+    auto port = port_;
     HIMC himc = ImmGetContext(hwnd_);
     if (!himc) return;
 
@@ -42,14 +54,14 @@ void WindowImpl::HandleImeComposition(LPARAM lparam) {
         return text;
     };
 
-    if (lparam & GCS_RESULTSTR) {
-        focused_->OnImeCommit(take_string(GCS_RESULTSTR));
-    }
+    const std::wstring result = lparam & GCS_RESULTSTR ? take_string(GCS_RESULTSTR) : std::wstring{};
+    std::wstring comp;
+    std::string attr;
+    LONG cursor = 0;
     if (lparam & GCS_COMPSTR) {
-        const std::wstring comp = take_string(GCS_COMPSTR);
-        LONG cursor = ImmGetCompositionStringW(himc, GCS_CURSORPOS, nullptr, 0);
+        comp = take_string(GCS_COMPSTR);
+        cursor = ImmGetCompositionStringW(himc, GCS_CURSORPOS, nullptr, 0);
         if (cursor < 0) cursor = static_cast<LONG>(comp.size());
-        std::string attr;
         if (lparam & GCS_COMPATTR) {
             const LONG n = ImmGetCompositionStringW(himc, GCS_COMPATTR, nullptr, 0);
             if (n > 0) {
@@ -57,10 +69,11 @@ void WindowImpl::HandleImeComposition(LPARAM lparam) {
                 ImmGetCompositionStringW(himc, GCS_COMPATTR, attr.data(), n);
             }
         }
-        focused_->OnImeCompose(comp, static_cast<size_t>(cursor), attr);
     }
     ImmReleaseContext(hwnd_, himc);
-    SyncImeCaret();
+    if (lparam & GCS_RESULTSTR) target->OnImeCommit(result);
+    if (target && (lparam & GCS_COMPSTR)) target->OnImeCompose(comp, static_cast<size_t>(cursor), attr);
+    if (port->target.load(std::memory_order_acquire)) SyncImeCaret();
 }
 
 void WindowImpl::SyncImeCaret() {

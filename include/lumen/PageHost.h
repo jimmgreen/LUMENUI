@@ -19,6 +19,11 @@ public:
     StackPanel& Page(std::wstring_view id);
     PageHost& Show(std::wstring_view id);
     const std::wstring& Current() const noexcept;
+    PageHost& BeforeLeave(std::function<bool(std::wstring_view, std::wstring_view)> guard) {
+        before_leave_ = std::move(guard); return *this;
+    }
+    PageHost& OnChanged(std::function<void(std::wstring_view)> fn) { changed_.Subscribe(std::move(fn)); return *this; }
+    Connection BindChanged(std::function<void(std::wstring_view)> fn) { return changed_.Connect(std::move(fn)); }
     // +1：新页从下方进入（选了更靠后的项）；-1：从上进入。
     int Direction() const noexcept { return direction_; }
 
@@ -38,6 +43,9 @@ protected:
     float DurationOrSnap(float seconds) const;
 
     std::vector<std::wstring> ids_;
+    std::vector<WeakRef<Control>> page_focus_;
+    std::function<bool(std::wstring_view, std::wstring_view)> before_leave_;
+    Signal<std::wstring_view> changed_;
     size_t current_ = static_cast<size_t>(-1);
     size_t outgoing_ = static_cast<size_t>(-1);
     int direction_ = 1;

@@ -1,4 +1,5 @@
 #include "common.h"
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -75,7 +76,81 @@ struct FilterDemo {
 };
 FilterDemo g_filter;
 
+struct PlotRow {
+    bool checked = true;
+    std::wstring title;
+    std::wstring paper;
+    std::wstring out_name;
+    std::wstring status;
+    float progress = 0.0f;
+};
+
+struct LiveRow {
+    std::wstring name;
+    double value = 0.0;
+    int count = 0;
+};
+
+struct PlotLiveDemo {
+    lumen::VectorModel<PlotRow> model;
+    std::vector<PlotRow> rows;
+    lumen::Connection frame;
+    lumen::Label* status = nullptr;
+    bool running = false;
+    float acc = 0.0f;
+    int current = 0;
+
+    void SyncModel() {
+        model.Reset(rows);
+        if (!status) return;
+        if (running && current < static_cast<int>(rows.size())) {
+            status->Text(L"Printing " + std::to_wstring(current + 1) + L"/" +
+                         std::to_wstring(rows.size()));
+            return;
+        }
+        status->Text(running ? L"Printing" : L"Idle");
+    }
+
+    bool Tick(float dt) {
+        if (!running) return false;
+        if (dt > 0.25f) dt = 0.016f;
+        acc += dt;
+        if (acc < 0.12f) return true;
+        acc = 0.0f;
+        if (current >= static_cast<int>(rows.size())) {
+            running = false;
+            if (status) status->Text(L"Done");
+            return false;
+        }
+        PlotRow& row = rows[static_cast<size_t>(current)];
+        row.status = L"Printing";
+        row.progress = std::min(1.0f, row.progress + 0.2f);
+        if (row.progress >= 0.999f) {
+            row.status = L"Done";
+            row.progress = 1.0f;
+            ++current;
+        }
+        SyncModel();
+        return true;
+    }
+
+    void Start(lumen::Window& window) {
+        current = 0;
+        acc = 0.0f;
+        for (PlotRow& row : rows) {
+            row.progress = 0.0f;
+            row.status = L"Queued";
+        }
+        running = true;
+        SyncModel();
+        frame.Disconnect();
+        frame = window.OnFrame([this](float dt) { return Tick(dt); });
+    }
+};
+PlotLiveDemo g_plot_live;
 } // namespace
+
+void StartPlotLiveDemo(lumen::Window& window) { g_plot_live.Start(window); }
 
 void BuildCollections(lumen::StackPanel& column, lumen::Window& window) {
     using namespace lumen;
@@ -292,6 +367,109 @@ void BuildCollections(lumen::StackPanel& column, lumen::Window& window) {
         })
         .RowCount(100000)
         .SelectedIndex(2);
+
+    // R21：逐行增量更新。1 万行、每拍只 At 一行——可见行带 + 页脚增量失效，
+    // 更新期间输入/滚动/选择不整表刷新。
+    auto& number_live_card = Sample(column, L"Table · live updates",
+                                    L"10000 rows, one cell per tick. Incremental dirty-band "
+                                    L"invalidation: no full-frame repaint per update. "
+                                    L"Try scrolling or editing while it runs.");
+    static VectorModel<LiveRow> live_model;
+    if (live_model.Count() == 0) {
+        for (int i = 0; i < 10000; ++i) {
+            LiveRow row;
+            row.name = L"Pulse " + std::to_wstring(i + 1);
+            row.value = (i % 100) + 1;
+            row.count = i % 7;
+            live_model.Push(std::move(row));
+        }
+    }
+    auto& number_live_table = number_live_card.Add<Table>();
+    number_live_table.RowHeight(32.0f);
+    number_live_table.Bind(live_model)
+        .Column(L"Name", &LiveRow::name, 160.0f)
+        .Column(L"Value", &LiveRow::value, 96.0f)
+        .Column(L"Count", &LiveRow::count, 96.0f)
+        .ColumnPrecision(1, 1)
+        .Footer(true);
+    number_live_table.Aggregate(1, ColumnAggregate::Sum);   // 页脚 Sum 随单行更新重算
+    static size_t live_cursor = 0;
+    static lumen::Window::TimerId live_timer = 0;
+    number_live_card.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center)
+        .Add<ToggleButton>(L"Run updates")
+        .OnToggled([&window](bool on) {
+            if (on) {
+                // 每拍只 At 一行：两参 At 发 OnChanged → 表格只失效该行可见行带 + 页脚。
+                live_cursor = 0;
+                live_timer = window.SetInterval(0.033f, [] {
+                    const size_t row = live_cursor++ % live_model.Count();
+                    live_model.At(row).value = static_cast<double>((live_cursor * 7) % 1000) / 10.0;
+                    live_model.At(row, live_model.At(row));
+                });
+                window.ShowToast(L"Live updates on — scroll/edit while it runs");
+            } else if (live_timer != 0) {
+                window.ClearTimer(live_timer);
+                live_timer = 0;
+            }
+        });
+
+    if (g_plot_live.rows.empty()) {
+        for (int i = 0; i < 11; ++i) {
+            PlotRow row;
+            row.title = L"Sheet " + std::to_wstring(i + 1);
+            row.paper = L"A0";
+            row.out_name = std::to_wstring(i + 1) + L"_sheet.pdf";
+            row.status = L"Queued";
+            g_plot_live.rows.push_back(std::move(row));
+        }
+        g_plot_live.model.Map([](const PlotRow& item, ItemRow& out) {
+            out.cells = {item.checked ? L"1" : L"0", item.title, item.paper, item.out_name, L"",
+                         item.status};
+        });
+        g_plot_live.model.Reset(g_plot_live.rows);
+    }
+    auto& plot_live_card = Sample(
+        column, L"Table · live Reset",
+        L"Same pattern as batch-plot: VectorModel Reset while progress/status change every frame.");
+    auto& plot_live_head = plot_live_card.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
+    plot_live_head.Add<Button>(L"Simulate print", ButtonKind::Primary)
+        .OnClick([&window] { g_plot_live.Start(window); });
+    g_plot_live.status = &plot_live_head.Add<Label>(L"Idle", TextRole::Caption);
+    g_plot_live.status->Secondary(true).Grow();
+    auto& plot_live_table = plot_live_card.Add<Table>();
+    plot_live_table.FillCross().RowHeight(36.0f).MinSize({0.0f, 280.0f});
+    plot_live_table.Bind(g_plot_live.model);
+    plot_live_table.AddColumn(L"On", 56.0f).CheckBox(
+        [](size_t i) {
+            return i < g_plot_live.rows.size() ? g_plot_live.rows[i].checked : false;
+        },
+        [](size_t i, bool v) {
+            if (i < g_plot_live.rows.size()) g_plot_live.rows[i].checked = v;
+        });
+    plot_live_table.AddColumn(L"Title");
+    plot_live_table.AddColumn(L"Paper", 80.0f).TextBox(
+        [](size_t i) {
+            return i < g_plot_live.rows.size() ? g_plot_live.rows[i].paper : std::wstring{};
+        },
+        [](size_t i, std::wstring v) {
+            if (i < g_plot_live.rows.size()) g_plot_live.rows[i].paper = std::move(v);
+        });
+    plot_live_table.AddColumn(L"File");
+    plot_live_table.AddColumn(L"Load", 120.0f).Progress([](size_t i) {
+        return i < g_plot_live.rows.size() ? g_plot_live.rows[i].progress : 0.0f;
+    });
+    plot_live_table.AddColumn(L"State", 100.0f);
+    plot_live_table.CellText([](size_t row, size_t col, std::wstring& out) {
+        if (row >= g_plot_live.rows.size()) {
+            out.clear();
+            return;
+        }
+        const PlotRow& item = g_plot_live.rows[row];
+        if (col == 1) out = item.title;
+        else if (col == 3) out = item.out_name;
+        else if (col == 5) out = item.status;
+        else out.clear();
+    });
 
     auto& log_card = Sample(column, L"LogView", L"Monospace, follow-tail, Ctrl+C copies the selected line.");
     auto& log = Wide(log_card).Add<LogView>();

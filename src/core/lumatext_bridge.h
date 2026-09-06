@@ -7,12 +7,19 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace lumen {
 
+// App::LumaTextLibrary：lumatext.dll 的显式完整路径（空 = 模块目录 → 系统搜索顺序）。
+void LumaTextLibraryPath(std::wstring path);
+// App::Shutdown：清掉按 IDWriteTextFormat 指针缓存的进程级表（TextService 重建后指针会复用）。
+void LumaTextResetProcessCaches() noexcept;
+
 struct LumaTextStats {
     std::uint64_t draw_calls = 0;
+    std::uint64_t prepare_calls = 0;
     std::uint64_t freetype_glyphs = 0;
     std::uint64_t cache_hits = 0;
     std::uint64_t surface_cache_hits = 0;
@@ -39,6 +46,9 @@ public:
               const D2D1_RECT_F& bounds, const D2D1_COLOR_F& foreground,
               const D2D1_COLOR_F& background, float scale,
               DWRITE_TEXT_ALIGNMENT alignment = DWRITE_TEXT_ALIGNMENT_LEADING);
+    bool Prepare(std::wstring_view text, IDWriteTextFormat* format,
+                 const D2D1_RECT_F& bounds, const D2D1_COLOR_F& foreground,
+                 const D2D1_COLOR_F& background, float scale, DWRITE_TEXT_ALIGNMENT alignment);
     bool Measure(std::wstring_view text, IDWriteTextFormat* format,
                  float& width, float* height = nullptr);
     // 与 Draw 同一套布局（物理字号）。坐标为 DIP；失败时调用方回退 DirectWrite。

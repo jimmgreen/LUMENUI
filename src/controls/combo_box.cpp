@@ -1,5 +1,6 @@
 #include "lumen/ComboBox.h"
 #include "lumen/Chip.h"
+#include "lumen/TextBox.h"
 #include "lumen/Icons.h"
 #include "lumen/Painter.h"
 #include "../core/window_impl.h"
@@ -60,6 +61,28 @@ bool JumpIsRepeat(const std::wstring& jump) noexcept {
     return true;
 }
 } // namespace
+
+class ComboBox::EditField : public TextBox {
+public:
+    explicit EditField(ComboBox* owner) : owner_(owner) {
+        OnTextChanged([this](std::wstring_view) { owner_->EditChanged(); });
+    }
+    bool Char(wchar_t ch) { return TextBox::OnChar(ch); }
+    bool Key(uint32_t key) { return TextBox::OnKey(key); }
+    using TextBox::OnImeCompose;
+    using TextBox::OnImeCommit;
+    using TextBox::OnImeEnd;
+    using TextBox::ImeCaret;
+protected:
+    bool OnKey(uint32_t key) override {
+        if (key == VK_DOWN || key == VK_F4) { owner_->OpenPopup(); return true; }
+        if (key == VK_RETURN) { owner_->CommitText(); return true; }
+        if (key == VK_ESCAPE) { owner_->Text(owner_->committed_text_); return true; }
+        return TextBox::OnKey(key);
+    }
+private:
+    ComboBox* owner_;
+};
 
 class ComboBox::DropdownPopup : public Control {
 public:
@@ -196,7 +219,8 @@ protected:
 
     bool OnKey(uint32_t vk) override {
         if (vk == VK_ESCAPE) { WindowImpl::CloseTransient(window_); return true; }
-        if (vk == VK_RETURN || vk == VK_SPACE) { Commit(); return true; }
+        if (vk == VK_RETURN || (vk == VK_SPACE && !owner_->editable_)) { Commit(); return true; }
+        if (owner_->editable_ && (vk == VK_HOME || vk == VK_END)) return owner_->EditKey(vk);
         if (vk == VK_UP || vk == VK_DOWN || vk == VK_HOME || vk == VK_END ||
             vk == VK_PRIOR || vk == VK_NEXT) {
             if (matches_.empty()) return true;
@@ -215,23 +239,26 @@ protected:
             Invalidate();
             return true;
         }
-        return false;
+        return owner_->editable_ ? owner_->EditKey(vk) : false;
     }
 
     bool OnChar(wchar_t ch) override {
-        if (owner_->editable_) {
-            if (ch == 0x08) { if (!owner_->edit_text_.empty()) owner_->edit_text_.pop_back(); }
-            else if (ch >= 0x20) owner_->edit_text_.push_back(ch);
-            else return false;
-            owner_->selected_ = -1;
-            Rebuild(true);
-            owner_->Invalidate();
-            return true;
-        }
+        if (owner_->editable_) return owner_->EditChar(ch);
         if (ch < 0x20) return false;
         owner_->TypeJump(ch);
         return true;
     }
+
+    bool ImeInline() const noexcept override { return owner_->editable_; }
+    bool ImeComposing() const noexcept override { return owner_->editor_ && owner_->editor_->Composing(); }
+    bool ImeCaret(Point& point, float& height) const override {
+        return owner_->editor_ && owner_->editor_->ImeCaret(point, height);
+    }
+    void OnImeCompose(std::wstring_view text, size_t cursor, std::string_view attributes) override {
+        if (owner_->editor_) owner_->editor_->OnImeCompose(text, cursor, attributes);
+    }
+    void OnImeCommit(std::wstring_view text) override { if (owner_->editor_) owner_->editor_->OnImeCommit(text); }
+    void OnImeEnd() override { if (owner_->editor_) owner_->editor_->OnImeEnd(); }
 
     bool OnWheel(float delta) override {
         if (MaxScroll() <= 0.0f) return false;
@@ -386,17 +413,23 @@ private:
         const DropRow& drop = rows_[static_cast<size_t>(focus_)];
         if (drop.header) return;
         if (owner_->multi_) {
+            WeakRef<DropdownPopup> self(this);
             owner_->ToggleItem(drop.index);
-            Invalidate();
+            if (self) Invalidate();
             return;
         }
         const ptrdiff_t selected = static_cast<ptrdiff_t>(drop.index);
         const bool changed = owner_->selected_ != selected;
         owner_->selected_ = selected;
-        if (owner_->editable_) owner_->edit_text_ = owner_->items_[drop.index];
-        owner_->Invalidate();
-        WindowImpl::CloseTransient(window_);
-        if (changed) owner_->changed_.Emit(owner_->selected_, owner_->selected_);
+        owner_->RememberSelection();
+        ComboBox* owner = owner_;
+        Window* window = window_;
+        WeakRef<ComboBox> live(owner);
+        if (owner->editable_) { owner->Text(owner->items_[drop.index]); owner->CommitText(); }
+        if (!live) return;
+        owner->Invalidate();
+        WindowImpl::CloseTransient(window);
+        if (live && changed) owner->changed_.Emit(owner->selected_, owner->selected_);
     }
 
     ComboBox* owner_ = nullptr;
@@ -433,6 +466,7 @@ ComboBox& ComboBox::AddItem(std::wstring_view text) {
 
 ComboBox& ComboBox::Items(std::vector<std::wstring> items) {
     items_ = std::move(items);
+    item_keys_.clear(); selected_keys_.clear(); selected_key_ = 0;
     FilterSelection();
     if (editable_ && selected_ >= 0) edit_text_ = items_[static_cast<size_t>(selected_)];
     SyncChips();
@@ -447,6 +481,7 @@ ComboBox& ComboBox::MaxDropDownRows(size_t value) {
 
 ComboBox& ComboBox::ClearItems() {
     items_.clear();
+    item_keys_.clear(); selected_keys_.clear(); selected_key_ = 0;
     groups_.clear();
     selected_ = -1;
     selected_set_.clear();
@@ -457,26 +492,64 @@ ComboBox& ComboBox::ClearItems() {
     return *this;
 }
 
-namespace {
-void ReloadComboModel(ComboBox& box, ItemsModel* model) {
+uint64_t ComboBox::SelectedKey() const noexcept {
+    return selected_ >= 0 && static_cast<size_t>(selected_) < item_keys_.size()
+        ? item_keys_[static_cast<size_t>(selected_)] : selected_key_;
+}
+
+void ComboBox::RememberSelection() {
+    selected_key_ = selected_ >= 0 && static_cast<size_t>(selected_) < item_keys_.size()
+        ? item_keys_[static_cast<size_t>(selected_)] : 0;
+    selected_keys_.clear();
+    for (auto index : selected_set_) if (index >= 0 && static_cast<size_t>(index) < item_keys_.size())
+        selected_keys_.push_back(item_keys_[static_cast<size_t>(index)]);
+}
+
+ComboBox& ComboBox::SelectKey(uint64_t key) {
+    const auto it = std::find(item_keys_.begin(), item_keys_.end(), key);
+    WeakRef<ComboBox> self(this);
+    SelectedIndex(it == item_keys_.end() ? -1 : static_cast<ptrdiff_t>(it - item_keys_.begin()));
+    if (self) selected_key_ = key;
+    return *this;
+}
+
+void ComboBox::ReloadModel() {
+    const auto key = SelectedKey();
+    const auto previous = selected_;
+    const auto previous_set = selected_set_;
     std::vector<std::wstring> items;
-    if (model) {
+    std::vector<uint64_t> keys;
+    if (model_) {
         ItemRow row;
-        const size_t n = model->Count();
-        items.reserve(n);
-        for (size_t i = 0; i < n; ++i) {
-            model->Get(i, row);
-            items.push_back(std::move(row.text));
+        items.reserve(model_->Count()); keys.reserve(model_->Count());
+        for (size_t i = 0; i < model_->Count(); ++i) {
+            model_->Get(i, row);
+            items.push_back(row.text); keys.push_back(model_->RowKey(i));
         }
     }
-    box.Items(std::move(items));
+    items_ = std::move(items); item_keys_ = std::move(keys);
+    const auto found = std::find(item_keys_.begin(), item_keys_.end(), key);
+    selected_ = key ? (found != item_keys_.end() ? static_cast<ptrdiff_t>(found - item_keys_.begin()) : -1)
+                    : (previous < static_cast<ptrdiff_t>(items_.size()) ? previous : -1);
+    selected_key_ = key;
+    selected_set_.clear();
+    if (std::none_of(item_keys_.begin(), item_keys_.end(), [](uint64_t v) { return v != 0; })) {
+        for (auto index : previous_set) if (index >= 0 && index < static_cast<ptrdiff_t>(items_.size())) selected_set_.push_back(index);
+    }
+    for (size_t i = 0; i < item_keys_.size(); ++i)
+        if (item_keys_[i] && std::find(selected_keys_.begin(), selected_keys_.end(), item_keys_[i]) != selected_keys_.end())
+            selected_set_.push_back(static_cast<ptrdiff_t>(i));
+    if (editable_ && selected_ >= 0 && (!editor_ || (!editor_->HasFocus() && !editor_->Composing())))
+        Text(items_[static_cast<size_t>(selected_)]);
+    SyncChips();
+    if (dropdown_open_) popup_->Rebuild(false);
+    RelayoutParent();
 }
-} // namespace
 
 ComboBox& ComboBox::Bind(ItemsModel& model) {
     owned_model_.reset();
     model_ = &model;
-    auto reload = [this] { ReloadComboModel(*this, model_); };
+    auto reload = [this] { ReloadModel(); };
     model_reset_ = ScopedConnection(model.OnReset(reload));
     model_inserted_ = ScopedConnection(model.OnInserted([reload](size_t, size_t) { reload(); }));
     model_removed_ = ScopedConnection(model.OnRemoved([reload](size_t, size_t) { reload(); }));
@@ -513,6 +586,7 @@ ComboBox& ComboBox::Editable(bool value) {
     } else {
         edit_text_.clear();
     }
+    SyncChips(); Relayout();
     Invalidate();
     return *this;
 }
@@ -578,9 +652,10 @@ ComboBox& ComboBox::SelectedIndex(ptrdiff_t index) {
         SyncChips();
         Relayout();
     } else if (editable_ && selected_ >= 0) {
-        edit_text_ = items_[static_cast<size_t>(selected_)];
+        Text(items_[static_cast<size_t>(selected_)]);
     }
     Invalidate();
+    RememberSelection();
     changed_.Emit(selected_, selected_);
     return *this;
 }
@@ -602,6 +677,7 @@ ComboBox& ComboBox::SelectedIndices(std::vector<ptrdiff_t> indices) {
     SyncChips();
     Relayout();
     Invalidate();
+    RememberSelection();
     changed_.Emit(selected_, selected_);
     return *this;
 }
@@ -614,6 +690,7 @@ ComboBox& ComboBox::ClearSelection() {
     SyncChips();
     Relayout();
     Invalidate();
+    RememberSelection();
     changed_.Emit(selected_, selected_);
     return *this;
 }
@@ -628,10 +705,20 @@ void ComboBox::ToggleItem(size_t data) {
     SyncChips();
     Relayout();
     Invalidate();
+    RememberSelection();
     changed_.Emit(selected_, selected_);
 }
 
 void ComboBox::SyncChips() {
+    if (editable_ && !multi_) {
+        if (!editor_) {
+            while (ChildCount() > 0) Remove(Child(0));
+            editor_ = &Add<EditField>(this);
+            editor_->Text(edit_text_).Placeholder(placeholder_);
+        }
+        return;
+    }
+    if (editor_) { Remove(*editor_); editor_ = nullptr; }
     auto compact = [this] {
         for (size_t i = ChildCount(); i-- > 0;) {
             if (!ChildVisible(i)) Remove(Child(i));
@@ -669,7 +756,8 @@ void ComboBox::SyncChips() {
             selected_ = selected_set_.empty() ? ptrdiff_t{-1} : selected_set_.back();
             Relayout();
             Invalidate();
-            changed_.Emit(selected_, selected_);
+            RememberSelection();
+    changed_.Emit(selected_, selected_);
         });
     }
 }
@@ -691,6 +779,7 @@ Size ComboBox::Measure(Size available, const Theme& theme) {
     SyncChips();
     const bool finite = AxisFinite(available.w);
     const float width = finite ? available.w : kFieldWidth;
+    if (editable_ && editor_) MeasureChildAt(0, {std::max(0.0f, width - kChevronArea), theme.input_height}, theme);
     if (!multi_ || ChildCount() == 0) return {width, theme.input_height};
 
     // Grow 的 Row 先以无限宽测一遍再按份额重测。无限宽时按 kFieldWidth 折行
@@ -720,6 +809,11 @@ Size ComboBox::Measure(Size available, const Theme& theme) {
 void ComboBox::Arrange(const Rect& absolute) {
     absolute_ = absolute;
     SyncChips();
+    if (editable_ && editor_) {
+        SetChildBounds(*editor_, {1.0f, 1.0f, std::max(0.0f, absolute.w - kChevronArea), absolute.h - 2.0f});
+        ArrangeChildAt(0);
+        return;
+    }
     if (!multi_ || ChildCount() == 0) return;
     const float inner = std::max(0.0f, absolute.w - kChipPadH * 2.0f - kChevronArea);
     float x = kChipPadH;
@@ -759,12 +853,20 @@ void ComboBox::OnMouseUp(Point local, uint32_t) {
 void ComboBox::OpenPopup(bool from_typing) {
     if (items_.empty() || !window_) return;
     popup_->Rebuild(editable_ && from_typing);
-    if (popup_->MatchCount() == 0) return;
+    if (popup_->MatchCount() == 0 || dropdown_open_) return;
     dropdown_open_ = true;
     Animate();
     Invalidate();
     WindowImpl::ShowTransient(window_, popup_.get(), this, absolute_.w, false,
                               [this] { dropdown_open_ = false; Animate(); Invalidate(); });
+}
+
+bool ComboBox::AutomationCollapse() {
+    if (!enabled_) return false;
+    if (dropdown_open_ && window_ && WindowImpl::TransientActive(window_, popup_.get())) {
+        WindowImpl::CloseTransient(window_);
+    }
+    return !dropdown_open_;
 }
 
 void ComboBox::TypeJump(wchar_t ch) {
@@ -798,22 +900,16 @@ void ComboBox::TypeJump(wchar_t ch) {
         selected_ = found;
         Invalidate();
     } else if (selected_ != found) {
+        WeakRef<ComboBox> self(this);
         SelectedIndex(found);
+        if (!self.Get()) return;
     }
     if (dropdown_open_) popup_->FocusDataIndex(static_cast<size_t>(found));
 }
 
 bool ComboBox::OnChar(wchar_t ch) {
     if (!enabled_) return false;
-    if (editable_) {
-        if (ch == 0x08) { if (!edit_text_.empty()) edit_text_.pop_back(); }
-        else if (ch >= 0x20) edit_text_.push_back(ch);
-        else return false;
-        selected_ = -1;
-        Invalidate();
-        OpenPopup(true);
-        return true;
-    }
+    if (editable_) return EditChar(ch);
     if (ch < 0x20) return false;
     TypeJump(ch);
     return true;
@@ -867,12 +963,43 @@ void ComboBox::Draw(Painter& painter, const Theme& theme) {
     painter.StrokeRoundedRect(absolute_, radius, border);
     painter.DrawChevron({absolute_.Right() - kChevronArea * 0.5f, absolute_.y + absolute_.h * 0.5f},
                         16.0f, 180.0f * chevron_t_, enabled_ ? theme.text_secondary : theme.text_disabled, 1.6f);
-    if (multi_ && ChildCount() > 0) return;
+    if (editable_ || (multi_ && ChildCount() > 0)) return;
     const std::wstring selected = SelectedText();
     const std::wstring& text = selected.empty() ? placeholder_ : selected;
     if (!text.empty()) painter.DrawText(text, {absolute_.x + kPadX, absolute_.y,
                                                absolute_.w - kPadX - kChevronArea, absolute_.h},
                                         TextRole::Body, selected.empty() ? theme.text_secondary : label);
+}
+
+TextBox& ComboBox::Editor() {
+    if (multi_) MultiSelect(false);
+    Editable(true); SyncChips(); return *editor_;
+}
+ComboBox& ComboBox::Text(std::wstring_view value) {
+    edit_text_ = value;
+    if (editor_) editor_->Text(value);
+    Invalidate(); return *this;
+}
+void ComboBox::CommitText() {
+    if (!editable_ || committed_text_ == edit_text_) return;
+    committed_text_ = edit_text_;
+    text_committed_.Emit(committed_text_);
+}
+bool ComboBox::EditChar(wchar_t ch) { Editor(); return editor_->Char(ch); }
+bool ComboBox::EditKey(uint32_t vk) { return editor_ && editor_->Key(vk); }
+void ComboBox::EditChanged() {
+    if (!editor_) return;
+    edit_text_ = editor_->Text();
+    selected_ = -1;
+    Invalidate();
+    if (!editor_->Composing()) OpenPopup(true);
+    text_changed_.Emit(edit_text_);
+}
+ComboBox& ComboBox::BindText(Property<std::wstring>& value) {
+    Editable(true); Text(value.Get());
+    text_prop_ = ScopedConnection(value.OnChanged([this](const std::wstring& text) { Text(text); }));
+    text_ctrl_ = ScopedConnection(text_changed_.Connect([&value](std::wstring_view text) { value = std::wstring(text); }));
+    return *this;
 }
 
 ComboBox& ComboBox::BindSelectedIndex(Property<int>& p) {

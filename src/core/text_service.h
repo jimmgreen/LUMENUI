@@ -3,20 +3,36 @@
 #include "com_ptr.h"
 #include "lumen/Core.h"
 #include <dwrite_3.h>
+#include <cstddef>
 #include <list>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace lumen {
 
 class TextService {
 public:
     bool Init();
+    // App::Shutdown：释放全部 DWrite 对象与缓存，回到未 Init 状态（下次 Format 重新 Init）。
+    void Reset();
     IDWriteFactory3* Factory() const noexcept { return factory_.get(); }
 
+    // 角色格式；有字体族覆盖（PushFamily）时返回同角色字号/字重但换族的缓存格式。
     IDWriteTextFormat* Format(TextRole role);
     IDWriteTextFormat* IconFormat(float size);
+
+    // 自定义字体（内存复制 / 文件引用）进进程级 IDWriteFontCollection1；返回首个族名。
+    std::wstring AddFont(std::span<const std::byte> data);
+    std::wstring AddFontFile(std::wstring_view path);
+    // 字体族覆盖栈（FontFamilyScope）。view 必须活过作用域；空串 = 角色默认。
+    void PushFamily(std::wstring_view family) noexcept;
+    void PopFamily() noexcept;
+    std::wstring_view CurrentFamily() const noexcept {
+        return family_depth_ > 0 ? family_stack_[family_depth_ - 1] : std::wstring_view{};
+    }
 
     // 单行布局（超宽自动省略号截断），按 (格式, 宽度, 对齐, 文本) 缓存。
     IDWriteTextLayout* LineLayout(std::wstring_view text, IDWriteTextFormat* format,
@@ -78,9 +94,26 @@ private:
                              uint32_t length);
     void EnsureFontFallback();
     void CacheFontMetrics();
+    IDWriteTextFormat* RoleFormat(TextRole role);
+    IDWriteTextFormat* FamilyFormat(TextRole role, std::wstring_view family);
+    void ApplyRoleFallback(IDWriteTextFormat* format, TextRole role);
+    std::wstring RegisterFontFile(IDWriteFontFile* file);
+    bool RebuildCustomCollection();
+    bool CollectionHasFamily(IDWriteFontCollection* collection, std::wstring_view family);
 
     ComPtr<IDWriteFactory3> factory_;
     ComPtr<IDWriteTextFormat> formats_[kTextRoleCount];
+    struct FamilyFormatEntry {
+        ComPtr<IDWriteTextFormat> format;
+        size_t role = 0;
+    };
+    std::unordered_map<uint64_t, FamilyFormatEntry> family_formats_;
+    ComPtr<IDWriteInMemoryFontFileLoader> memory_loader_;
+    std::vector<ComPtr<IDWriteFontFile>> custom_files_;
+    ComPtr<IDWriteFontCollection1> custom_collection_;
+    static constexpr size_t kFamilyDepth = 8;
+    std::wstring_view family_stack_[kFamilyDepth];
+    size_t family_depth_ = 0;
     ComPtr<IDWriteFontFallback> font_fallback_;
     ComPtr<IDWriteRenderingParams> grayscale_params_;
     ComPtr<IDWriteTypography> tabular_;
