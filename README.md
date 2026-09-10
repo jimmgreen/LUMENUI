@@ -63,7 +63,9 @@ lumen_add_executable(myapp main.cpp app.rc)
 
 起步模板：`examples/template/`（`cmake -S . -B build`，带图标）。vcpkg overlay：`ports/lumen/`。非 CMake 工程 `#include <lumen/wmain.h>` 后写 `LUMEN_MAIN()`，不要再链 `lumen::main`。
 
-LumaText 缺失时 configure 会 `WARNING`，运行回退 DirectWrite；强制失败加 `-DLUMEN_REQUIRE_LUMATEXT=ON`。有预编译 LumaText 包（含 `lib/cmake/LumaText`）时，加 `-DLUMEN_USE_PREBUILT_LUMATEXT=ON` 和 `CMAKE_PREFIX_PATH` 直连，不再编译子目录源码。
+LumaText 的 Windows x64 预编译依赖固定在 `third_party/lumatext/`，包含头文件、DLL、导入库、CMake 配置与许可证。`build.bat` 和默认 CMake 配置直接使用该目录，不下载依赖，也不探测或编译旁边的 LumaText 源码；清空 `build/` 后仍可复用。来源与校验值见 [依赖说明](third_party/lumatext/README.md)。
+
+替换预编译包可指定 `-DLUMATEXT_PREBUILT_DIR=C:/libs/lumatext`。只有开发 LumaText 本身时，才手动配置 `-DLUMEN_USE_PREBUILT_LUMATEXT=OFF -DLUMATEXT_SOURCE_DIR=C:/src/lumatext`。旧缓存中的源码路径不会在预编译模式下触发源码构建。`build.bat` 强制要求依赖可用；手动 CMake 配置可用 `-DLUMEN_WITH_LUMATEXT=OFF` 明确选择 DirectWrite，或用 `LUMEN_REQUIRE_LUMATEXT` 控制缺失依赖时是否失败。
 
 产品代码按需 include 单个控件头。三套最小集：
 

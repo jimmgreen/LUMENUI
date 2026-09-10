@@ -1,9 +1,9 @@
 name: Release
 
 # 打 v* tag 时在 GitHub 上编译 Gallery 与 SDK 并发布 Release。
-# lumatext 是私有仓库，CI 不编译它：直接使用 lumatext-deps Release 上的预编译产物
+# CI 不编译 LumaText：直接使用仓库 third_party/lumatext 中固定的预编译产物
 # （include/ + bin/lumatext.dll + lib/lumatext.lib + lib/cmake/LumaText），经
-# find_package(LumaText) 以 LumaText::Shared 接入。升级产物后同步更新 URL 与 SHA256。
+# find_package(LumaText) 以 LumaText::Shared 接入。升级产物时同步更新 SHA256SUMS。
 on:
   push:
     tags:
@@ -18,25 +18,17 @@ concurrency:
 jobs:
   windows-x64:
     runs-on: windows-latest
-    env:
-      LUMATEXT_PREBUILT_URL: https://github.com/jimmgreen/LUMENUI/releases/download/lumatext-deps/lumatext-prebuilt-20260906.zip
-      LUMATEXT_PREBUILT_SHA256: FEAD9871FC68C341E537B437800D22E1E0B8D7F86884D6427A7C8A7423C047A3
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch prebuilt lumatext
+      - name: Verify bundled LumaText
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "$env:LUMATEXT_PREBUILT_URL" -OutFile lumatext-prebuilt.zip
-          $hash = (Get-FileHash lumatext-prebuilt.zip -Algorithm SHA256).Hash
-          if ($hash -ne $env:LUMATEXT_PREBUILT_SHA256) { throw "lumatext prebuilt hash mismatch: $hash" }
-          Expand-Archive lumatext-prebuilt.zip -DestinationPath _deps
-          # 预编译包在 UTC+8 机器打包，UTC runner 解出的 mtime 在未来，CMake 会无限重生成
-          # （ninja: manifest 'build.ninja' still dirty after 100 tries）。钳到当前时间。
-          $clamp = (Get-Date).AddMinutes(-5)
-          Get-ChildItem _deps -Recurse -File | ForEach-Object { $_.LastWriteTime = $clamp }
-          Get-ChildItem _deps -Recurse -Directory | ForEach-Object { $_.LastWriteTime = $clamp }
-          "LUMATEXT_PREFIX=$PWD/_deps/lumatext-prebuilt" >> $env:GITHUB_ENV
+          Get-Content third_party/lumatext/SHA256SUMS | ForEach-Object {
+            $expected, $relative = $_ -split '  ', 2
+            $actual = (Get-FileHash "third_party/lumatext/$relative" -Algorithm SHA256).Hash
+            if ($actual -ne $expected) { throw "LumaText checksum mismatch: $relative" }
+          }
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -47,7 +39,6 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DLUMEN_WITH_LUMATEXT=ON -DLUMEN_REQUIRE_LUMATEXT=ON `
             -DLUMEN_USE_PREBUILT_LUMATEXT=ON `
-            -DCMAKE_PREFIX_PATH="$env:LUMATEXT_PREFIX" `
             -DLUMEN_BUILD_TESTS=OFF
           cmake --build build
 
@@ -55,8 +46,6 @@ jobs:
         shell: pwsh
         run: |
           cmake --install build --prefix dist/sdk
-          New-Item -ItemType Directory dist/sdk/licenses/LumaText -Force | Out-Null
-          Copy-Item "$env:LUMATEXT_PREFIX/licenses/*" dist/sdk/licenses/LumaText/
           $gallery = "dist/gallery"
           New-Item -ItemType Directory $gallery | Out-Null
           Copy-Item build/lumen_gallery.exe $gallery/

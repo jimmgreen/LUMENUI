@@ -1,0 +1,2 @@
+# Keep pinned prebuilt package bytes unchanged across Windows/Linux checkouts.
+third_party/lumatext/** -text

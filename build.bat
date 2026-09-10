@@ -13,7 +13,5 @@ if not defined VCVARS (
     exit /b 1
 )
 call "%VCVARS%" || exit /b 1
-set "LUMATEXT_ARGS="
-if exist "%ROOT%\..\lumatext\CMakeLists.txt" set "LUMATEXT_ARGS=-DLUMEN_WITH_LUMATEXT=ON -DLUMATEXT_SOURCE_DIR=%ROOT%\..\lumatext"
-cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release %LUMATEXT_ARGS% || exit /b 1
+cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLUMEN_WITH_LUMATEXT=ON -DLUMEN_REQUIRE_LUMATEXT=ON -DLUMEN_USE_PREBUILT_LUMATEXT=ON "-DLUMATEXT_PREBUILT_DIR=%ROOT%\third_party\lumatext" || exit /b 1
 cmake --build "%ROOT%\build" || exit /b 1
