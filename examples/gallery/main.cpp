@@ -2,6 +2,9 @@
 #include "common.h"
 #include "resources/resource.h"
 #include <lumen/Main.h>
+#include "core/offscreen.h"
+#include "core/text_service.h"
+#include "core/lumatext_bridge.h"
 #include <sstream>
 #include <string>
 
@@ -11,6 +14,13 @@ int lumen_main(std::span<const std::wstring_view> args) {
 
     std::wstring start_page = L"overview";
     bool sim_print = false;
+    bool perf_hud = false;
+    bool debug_backdrop = false;
+    std::wstring screenshot;
+    Size viewport{kWinW, 860.0f};
+    float capture_scale = 1.0f;
+    float intensity = 0.5f;
+    lumen::Density density = lumen::Density::Normal;
     int quit_ms = 0;
     bool skip_exe = true;
     for (const std::wstring_view arg : args) {
@@ -18,6 +28,14 @@ int lumen_main(std::span<const std::wstring_view> args) {
             skip_exe = false;
             continue;
         }
+        if (arg == L"--perf-hud") { perf_hud = true; continue; }
+        if (arg == L"--debug-backdrop") { debug_backdrop = true; continue; }
+        if (arg.starts_with(L"--screenshot=")) { screenshot = arg.substr(13); continue; }
+        if (arg == L"--small") { viewport = {960.0f, 640.0f}; continue; }
+        if (arg == L"--compact") { density = lumen::Density::Compact; continue; }
+        if (arg == L"--comfortable") { density = lumen::Density::Comfortable; continue; }
+        if (arg.starts_with(L"--glow=")) { intensity = Clamp(std::stof(std::wstring(arg.substr(7))), 0.0f, 1.0f); continue; }
+        if (arg.starts_with(L"--capture-scale=")) { capture_scale = Clamp(std::stof(std::wstring(arg.substr(16))), 1.0f, 2.0f); continue; }
         if (arg == L"--sim-print") {
             sim_print = true;
             continue;
@@ -30,10 +48,12 @@ int lumen_main(std::span<const std::wstring_view> args) {
     }
 
     App app;
-    Window window(L"LUMEN Gallery", {kWinW, 860.0f}, Frame::Client);
+    Window window(L"LUMEN Gallery", viewport, Frame::Client);
     window.MinSize({960.0f, 640.0f});
-    window.Backdrop(Backdrop::All);
-    window.PerfHud(true);
+    if (!screenshot.empty()) window.Motion(MotionMode::Off);
+    window.Backdrop(debug_backdrop ? Backdrop::All : Backdrop::None);
+    window.PerfHud(perf_hud);
+    window.BindShortcut(L"F11", [&window] { window.PerfHud(!window.PerfHud()); });
     window.Icon(IDR_LUMEN_GALLERY_ICO);
     window.BindShortcut(L"F12", [&window] {
         std::wostringstream out;
@@ -42,6 +62,7 @@ int lumen_main(std::span<const std::wstring_view> args) {
     });
 
     auto& root = window.Root();
+    root.Density(density);
     auto& nav = root.Add<NavigationView>();
     BindShell(nav);
     nav.Grow().DisplayMode(NavigationDisplayMode::Auto).PaneLength(220.0f);
@@ -73,7 +94,7 @@ int lumen_main(std::span<const std::wstring_view> args) {
 
     auto add_page = [&](std::wstring_view id) -> StackPanel& {
         auto& page = nav.Page(id);
-        page.Padding(kPad, 20.0f).Spacing(kGap);
+        page.Padding(kPad).Spacing(kGap);
         return page;
     };
 
@@ -119,7 +140,24 @@ int lumen_main(std::span<const std::wstring_view> args) {
         }
     });
 
-    SetIntensity(window, 0.5f);
+    SetIntensity(window, intensity);
+    if (!screenshot.empty()) {
+        window.Show();
+        UpdateWindow(static_cast<HWND>(window.NativeHandle()));
+        OffscreenRenderer capture;
+        if (!capture.Init(static_cast<int>(viewport.w * capture_scale),
+                          static_cast<int>(viewport.h * capture_scale))) return 1;
+        Painter painter;
+        auto* dc = capture.BeginDraw();
+        painter.BeginFrame(dc, &UiText(), capture_scale);
+        LumaTextBridge capture_text;
+        if (capture_text.Init(UiText().Factory(), dc)) painter.SetLumaText(&capture_text);
+        const Theme theme = MakeTheme(g_glow.Get());
+        painter.FillRect({0.0f, 0.0f, viewport.w, viewport.h}, theme.bg);
+        DrawControlTree(painter, theme, &root);
+        painter.EndFrame();
+        return capture.EndDraw() && capture.SavePNG(screenshot.c_str()) ? 0 : 1;
+    }
     window.Show();
     return app.Run();
 }

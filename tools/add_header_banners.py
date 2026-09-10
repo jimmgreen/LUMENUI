@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-root = Path(r".\include\lumen")
+root = Path(__file__).resolve().parents[1] / "include" / "lumen"
 skip = {"win_undef.h"}
 
 protected_on = {

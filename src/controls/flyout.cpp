@@ -17,7 +17,7 @@ Flyout::~Flyout() {
 
 void Flyout::Draw(Painter& painter, const Theme& theme) {
     if (absolute_.IsEmpty()) return;
-    DrawElevated(painter, theme, absolute_, theme.radius_flyout, Elevation::Overlay, theme.bg);
+    DrawElevated(painter, theme, absolute_, theme.radius_flyout, Elevation::Overlay, theme.surface_flyout);
 }
 
 } // namespace lumen

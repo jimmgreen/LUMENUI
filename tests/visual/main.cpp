@@ -185,6 +185,7 @@ struct TestRangeSlider : RangeSlider {
     using RangeSlider::OnKey;
 };
 struct TestTabs : TabControl {
+    using TabControl::Measure;
     using TabControl::OnKey;
     using TabControl::OnMouseDown;
     using TabControl::OnMouseMove;
@@ -311,6 +312,7 @@ struct TestSplitView : SplitView {
     using SplitView::OnAnimate;
 };
 struct TestDialog : Dialog {
+    using Dialog::OnAnimate;
     using Dialog::Measure;
     using Dialog::Arrange;
     using Dialog::OnKey;
@@ -451,6 +453,23 @@ void TestInteraction() {
         slider.Values(90.0f, 10.0f);
         Check(slider.LowerValue() == 10.0f && slider.UpperValue() == 90.0f,
               "range slider programmatic values normalize");
+    }
+    {
+        TestTabs tabs;
+        auto& first = tabs.AddTab(L"Edit").Add<ScrollViewer>().Grow();
+        first.Add<Column>().MinSize({200.0f, 320.0f});
+        tabs.AddTab(L"Parameters").Add<Column>().MinSize({1100.0f, 900.0f});
+        const auto initial = tabs.Measure({600.0f, 1.0e5f}, Theme{});
+        Check(initial.w <= 600.0f && initial.h < 500.0f,
+              "tabs natural measure honors viewport width and visible page");
+        tabs.SelectedIndex(1);
+        const auto other = tabs.Measure({1280.0f, 1.0e5f}, Theme{});
+        Check(other.h > initial.h, "tabs measure selected page height");
+        tabs.SelectedIndex(0);
+        const auto returned = tabs.Measure({600.0f, 1.0e5f}, Theme{});
+        Check(std::fabs(initial.w - returned.w) < 0.01f &&
+              std::fabs(initial.h - returned.h) < 0.01f,
+              "tabs initial and round-trip natural sizes match");
     }
     {
         TestTabs tabs;
@@ -2585,6 +2604,12 @@ void TestExtras() {
         Check(normal.DesiredSize().h == 44.0f, "default density keeps medium height");
         const Theme compact_theme = short_btn.EffectiveTheme(theme);
         Check(compact_theme.button_height < theme.button_height, "effective theme scales button_height");
+        auto& nested = compact.Add<Column>().Add<Column>().Add<Button>(L"Nested");
+        root.Measure({400.0f, 2000.0f}, theme);
+        Check(std::fabs(nested.DesiredSize().h - compact_theme.button_height) < 0.01f,
+              "nested containers apply ancestor density only once");
+        Check(std::fabs(short_btn.DesiredSize().h - compact_theme.button_height) < 0.01f,
+              "density measurement matches drawing theme");
     }
     {
         TestRoot root;
@@ -4066,15 +4091,25 @@ void TestHostCycle() {
         Check(owner.NativeHandle() == nullptr, "destroyed owner forgets native handle");
         Check(owned.NativeHandle() == nullptr, "owner destruction clears owned handle");
     }
-    {
-        HWND shell = CreateWindowExW(0, L"STATIC", L"native-shell", WS_OVERLAPPEDWINDOW,
+    for (bool compose_to_frame : {false, true}) {
+        HWND shell = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, L"STATIC", L"native-shell", WS_OVERLAPPEDWINDOW,
                                       0, 0, 400, 300, nullptr, nullptr, nullptr, nullptr);
         Check(shell != nullptr, "embedded native shell created");
         Window child(WindowSpec{.title = L"embedded", .size = {240.0f, 120.0f},
-                                .parent = shell, .frameTarget = shell});
+                                .parent = shell, .frameTarget = shell, .composeToFrame = compose_to_frame,
+                                .cornerRadius = compose_to_frame ? 16.0f : 0.0f});
         child.Root().Add<Label>(L"Embedded host animation");
         HWND hwnd = static_cast<HWND>(child.NativeHandle());
         const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if (compose_to_frame) {
+            RECT input_rect{};
+            GetWindowRect(hwnd, &input_rect);
+            Check(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(input_rect.left, input_rect.top)) == HTTRANSPARENT,
+                  "custom rounded corner passes input through");
+            Check(SendMessageW(hwnd, WM_NCHITTEST, 0,
+                      MAKELPARAM((input_rect.left + input_rect.right) / 2, input_rect.top)) != HTTRANSPARENT,
+                  "custom rounded straight edge retains input");
+        }
         Check((style & WS_CHILD) != 0 && (style & WS_POPUP) == 0,
               "embedded window is created as a child");
         Check(GetParent(hwnd) == shell && child.TitleBar() != nullptr,
@@ -4145,6 +4180,31 @@ void TestHostCycle() {
               "embedded close delegates to shell after approval");
         DestroyWindow(shell);
         Check(child.Closed(), "native shell destruction closes child");
+    }
+    for (int cycle = 0; cycle < 12; ++cycle) {
+        HWND shell = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, L"STATIC", L"composition-shell",
+                                     WS_POPUP, 0, 0, 240, 120, nullptr, nullptr, nullptr, nullptr);
+        HWND input = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, L"STATIC", L"composition-input",
+                                     WS_CHILD, 0, 0, 240, 120, shell, nullptr, nullptr, nullptr);
+        {
+            Renderer renderer;
+            Check(renderer.Init(input, 240, 120, shell), "shell composition initializes");
+            Check(renderer.SetCornerRadius(24.0f), "rounded clip uses 16 DIP at 150 percent");
+            Renderer competing;
+            Check(!competing.Init(shell, 240, 120), "composition occupies shell topmost slot");
+            renderer.Resize(300, 180);
+            Check(renderer.Recover(), "shell composition survives device recovery");
+            Check(renderer.SetCornerRadius(32.0f), "rounded clip updates for 200 percent DPI");
+            Check(renderer.SetCornerRadius(0.0f), "maximized frame removes rounded clip");
+            Check(renderer.SetCornerRadius(24.0f), "restored frame restores rounded clip");
+            Check(!competing.Init(shell, 240, 120), "recovery retains shell target");
+            renderer.SetCompositionVisible(false);
+            renderer.SetCompositionVisible(true);
+            renderer.Shutdown();
+            Check(competing.Init(shell, 240, 120), "shutdown releases shell composition slot");
+            competing.Shutdown();
+        }
+        DestroyWindow(shell);
     }
     Check(warp_falls == 0, "host cycle keeps hardware D3D device");
     SetLogSink(nullptr);
@@ -4709,6 +4769,54 @@ void TestInjectedInput() {
     Check(!first.HasFocus() && window.Focused() == nullptr, "Blur clears focused control");
 }
 
+
+void TestEscapeShortcut() {
+    Window window(L"escape-shortcut", {400.0f, 240.0f});
+    auto& text = window.Root().Add<TestTextBox>();
+    auto& combo = window.Root().Add<ComboBox>();
+    combo.Editable(true).Items({L"200", L"300"}).SelectedIndex(1);
+    int cancelled = 0;
+    int letter_shortcuts = 0;
+    window.BindShortcut(L"Esc", [&] { ++cancelled; });
+    window.BindShortcut(L"A", [&] { ++letter_shortcuts; });
+    window.LayoutNow();
+    text.Focus();
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 1, "Escape shortcut runs from editable text focus");
+    window.DispatchKey('A');
+    Check(letter_shortcuts == 0, "unmodified character shortcut still yields to text input");
+    text.OnImeCompose(L"ce", 2, {});
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 1 && !text.ImeComposing(), "Escape cancels composition before window shortcut");
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 2, "next Escape after composition runs window shortcut");
+    combo.Editor().Focus();
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 3 && combo.Text() == L"300", "Escape shortcut is not swallowed by combo editor");
+    window.DispatchKey(VK_DOWN);
+    Check(window.FlyoutActive(), "combo dropdown opens before Escape");
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 3 && !window.FlyoutActive(), "Escape closes combo dropdown before window shortcut");
+    TestDialog dialog;
+    dialog.Title(L"Confirm").DefaultClose();
+    Control* dialog_trigger = window.Focused();
+    window.ShowDialog(dialog);
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 3 && combo.Text() == L"300", "dialog Escape does not invoke window shortcut or cancel background editor");
+    dialog.OnAnimate(1.0f);
+    Check(!window.DialogActive(), "Escape dismisses dialog after its exit animation");
+    Check(window.Focused() == dialog_trigger, "dialog Escape restores trigger focus");
+    window.ShowBusy(L"Working");
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 3, "busy overlay Escape does not invoke window shortcut");
+    window.CloseBusy();
+    combo.Editor().Focus();
+    combo.CommitText();
+    window.BindShortcut(L"Esc", {});
+    combo.Text(L"200");
+    window.DispatchKey(VK_ESCAPE);
+    Check(cancelled == 3 && combo.Text() == L"300", "without Escape binding combo keeps local cancel behavior");
+}
 
 void TestTypedEditSafety() {
     struct Row { int quantity = 10; uint64_t serial = 7; float value = 2.0f; };
@@ -5295,6 +5403,112 @@ void TestDebugChecks() {
     Check(hits == 3, "debug checks child/add/thread");
 }
 
+void TestDarkGradient() {
+    OffscreenRenderer renderer;
+    if (!renderer.Init(1024, 512)) {
+        Check(false, "dark gradient renderer init");
+        return;
+    }
+    Painter painter;
+    painter.BeginFrame(renderer.BeginDraw(), &UiText(), 1.0f);
+    painter.FillRect({0, 0, 1024, 512}, Color{0, 0, 0, 1});
+    painter.FillRoundedRect({8, 8, 1008, 496}, 24, Color{0.035f, 0.035f, 0.035f, 1});
+    painter.FillRoundedRectRadial({8, 8, 1008, 496}, 24, {512, 256}, 600,
+                                 Color{1, 1, 1, 0.08f}, Color{1, 1, 1, 0});
+    painter.EndFrame();
+    Check(renderer.EndDraw(), "dark gradient end draw");
+    Check(renderer.SavePNG(L"lumen_visual_gradient.png"), "dark gradient save png");
+    std::vector<uint8_t> pixels;
+    Check(renderer.ReadBack(pixels), "dark gradient readback");
+    if (pixels.size() != 1024u * 512u * 4u) return;
+    bool monochrome = true;
+    for (size_t i = 0; i < pixels.size(); i += 4) {
+        monochrome &= pixels[i] == pixels[i + 1] && pixels[i] == pixels[i + 2];
+    }
+    Check(monochrome, "dark gradient stays monochrome");
+    // Average across the noise tile so grain cannot hide a stepped light ramp.
+    // Compare displayed intensity, not the number of stops in the implementation.
+    float max_error = 0.0f;
+    for (int x = 520; x < 775; ++x) {
+        float actual = 0.0f, expected = 0.0f;
+        for (int y = 224; y < 288; ++y) {
+            actual += pixels[(static_cast<size_t>(y) * 1024u + x) * 4u];
+            const float dx = static_cast<float>(x) + 0.5f - 512.0f;
+            const float dy = static_cast<float>(y) + 0.5f - 256.0f;
+            const float t = std::min(1.0f, std::sqrt(dx * dx + dy * dy) / 270.0f);
+            const float alpha = 0.08f * (1.0f - t * t * (3.0f - 2.0f * t));
+            // The existing 0..2/255 white noise has mean alpha 1/255.
+            expected += (9.0f + 246.0f * alpha) * (254.0f / 255.0f) + 1.0f;
+        }
+        max_error = std::max(max_error, std::fabs(actual - expected) / 64.0f);
+    }
+    std::printf("dark gradient max averaged error: %.3f / 255\n", max_error);
+    Check(max_error < 1.2f, "dark gradient follows smooth falloff within quantization tolerance");
+}
+
+template<class T>
+struct PolishProbe : T {
+    using T::Arrange;
+    using T::Draw;
+    void KeyboardFocus(bool value) { this->focused_ = value; }
+};
+
+void TestQuietStates() {
+    Panel card;
+    card.Card(Panel::CardStyle::Subtle, 16.0f);
+    Check(!card.Spotlight(), "subtle card is static by default");
+    card.Card(Panel::CardStyle::Lumen, 16.0f);
+    Check(card.Spotlight(), "lumen card explicitly enables spotlight");
+    card.Card(Panel::CardStyle::Subtle, 16.0f);
+    Check(!card.Spotlight(), "changing to subtle clears previous spotlight");
+    card.Spotlight(true);
+    Check(card.Spotlight(), "static card supports explicit spotlight opt-in");
+
+    OffscreenRenderer target;
+    if (!target.Init(480, 180)) { Check(false, "quiet states renderer"); return; }
+    for (float intensity : {0.0f, 0.5f, 1.0f}) {
+        const Theme theme = MakeTheme(intensity);
+        PolishProbe<Button> standard;
+        PolishProbe<Button> primary;
+        PolishProbe<CheckBox> checkbox;
+        PolishProbe<ComboBox> combo;
+        standard.Arrange({20.0f, 20.0f, 120.0f, 40.0f});
+        primary.Kind(ButtonKind::Primary);
+        primary.Arrange({170.0f, 20.0f, 120.0f, 40.0f});
+        primary.KeyboardFocus(true);
+        checkbox.Arrange({320.0f, 20.0f, 120.0f, 40.0f});
+        combo.Arrange({20.0f, 100.0f, 120.0f, 40.0f});
+        Painter painter;
+        painter.BeginFrame(target.BeginDraw(), &UiText(), 1.0f);
+        painter.FillRect({0.0f, 0.0f, 480.0f, 180.0f}, theme.bg);
+        standard.Draw(painter, theme);
+        primary.Draw(painter, theme);
+        checkbox.Draw(painter, theme);
+        combo.Draw(painter, theme);
+        painter.EndFrame();
+        Check(target.EndDraw(), "quiet states enddraw");
+        Color pixel{};
+        Check(target.ReadPixel(20, 40, pixel) && pixel.r > 0.06f,
+              "standard button boundary survives glow settings");
+        Check(target.ReadPixel(320, 40, pixel) && pixel.r > 0.06f,
+              "unchecked checkbox boundary survives glow settings");
+        Check(target.ReadPixel(20, 120, pixel) && pixel.r > 0.06f,
+              "combo boundary survives glow settings");
+        Check(target.ReadPixel(220, 18, pixel) && pixel.r > 0.5f,
+              "primary keyboard focus survives glow settings");
+        if (intensity == 0.0f) Check(target.SavePNG(L"lumen_visual_quiet_states.png"), "save quiet states");
+    }
+    TestDialog short_title;
+    short_title.Title(L"Confirm").Message(L"Message").PrimaryButton(L"Continue");
+    TestDialog long_title;
+    long_title.Title(L"Confirm the project settings before replacing the current configuration")
+        .Message(L"Message").PrimaryButton(L"Continue");
+    const Theme theme = MakeTheme(0.0f);
+    const Size short_size = short_title.Measure({320.0f, 800.0f}, theme);
+    const Size long_size = long_title.Measure({320.0f, 800.0f}, theme);
+    Check(long_size.h > short_size.h + 20.0f, "wrapped dialog title reserves extra height");
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // 崩溃时也要能看到已通过的断言
     AddVectoredExceptionHandler(1, CrashReport);
@@ -5305,14 +5519,17 @@ int main() {
     TestSignal();
     TestLayout();
     TestTypography();
+    TestQuietStates();
     TestInteraction();
     TestImageViewRendering();
     TestExtras();
     TestGlowPrimitives();
+    TestDarkGradient();
     TestAcrylic();
     TestChoreography();
     TestDefaultChrome();
     TestInjectedInput();
+    TestEscapeShortcut();
     TestHwndFocus();
     TestPopupWindow();
     TestTypedEditSafety();

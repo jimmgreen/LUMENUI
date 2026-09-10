@@ -248,12 +248,12 @@ void FormField::Draw(Painter& painter, const Theme& theme) {
         if (!label_.empty()) {
             const float star = required_ ? kStarW : 0.0f;
             const float label_w = std::max(0.0f, (body_left_ > 0.0f ? label_width_ : absolute_.w) - star);
-            const Size ls = MeasureText(label_, TextRole::BodyStrong, label_w);
-            painter.DrawText(label_, {x, y, ls.w, kLabelH}, TextRole::BodyStrong, fg);
+            const Size ls = MeasureText(label_, TextRole::Body, label_w);
+            painter.DrawText(label_, {x, y, ls.w, kLabelH}, TextRole::Body, fg);
             x += ls.w;
         }
         if (required_) {
-            painter.DrawText(L" *", {x, y, kStarW, kLabelH}, TextRole::BodyStrong, theme.accent);
+            painter.DrawText(L" *", {x, y, kStarW, kLabelH}, TextRole::Body, theme.accent);
         }
         y += kLabelH;
     }

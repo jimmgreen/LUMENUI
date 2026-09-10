@@ -7,6 +7,8 @@
 #include <dwrite.h>
 #include <dwmapi.h>
 #include <wrl/client.h>  // 仅用 IID_PPV_ARGS 辅助
+#include <algorithm>
+#include <cmath>
 
 namespace lumen {
 
@@ -62,12 +64,13 @@ bool Renderer::IsDeviceLost(HRESULT hr) noexcept {
            hr == DXGI_ERROR_DEVICE_RESET || hr == DXGI_ERROR_DEVICE_HUNG;
 }
 
-bool Renderer::Init(HWND hwnd, int width_px, int height_px) {
+bool Renderer::Init(HWND hwnd, int width_px, int height_px, HWND composition_hwnd) {
     // 重入（Recover、或 CreateWindow 期间的首次 Paint 抢在构造函数 Init 之前）必须先放掉
     // 上一套设备链，否则窗口打开瞬间同时挂两套 D3D/DComp 设备，显存吃紧时第二套
     // D3D11CreateDevice 会 E_OUTOFMEMORY 退化到 WARP。
     ReleaseDeviceResources();
     hwnd_ = hwnd;
+    composition_hwnd_ = composition_hwnd ? composition_hwnd : hwnd;
     width_ = width_px;
     height_ = height_px;
     device_lost_ = false;
@@ -122,11 +125,17 @@ bool Renderer::CreateDeviceResources() {
 
     hr = DCompositionCreateDevice(dxgi_.get(), IID_PPV_ARGS(&comp_));
     if (FAILED(hr)) return false;
-    hr = comp_->CreateTargetForHwnd(hwnd_, TRUE, &comp_target_);
-    if (FAILED(hr)) return false;
+    hr = comp_->CreateTargetForHwnd(composition_hwnd_, TRUE, &comp_target_);
+    if (FAILED(hr)) {
+        Log(LogLevel::Error, L"Renderer composition target creation failed input=%p target=%p hr=0x%08lX",
+            hwnd_, composition_hwnd_, hr);
+        return false;
+    }
     if (FAILED(comp_->CreateVisual(&comp_visual_))) return false;
     comp_visual_->SetContent(swapchain_.get());
-    comp_target_->SetRoot(comp_visual_.get());
+    if (!UpdateCornerClip()) return false;
+    const bool visible = composition_hwnd_ == hwnd_ || (GetWindowLongPtrW(hwnd_, GWL_STYLE) & WS_VISIBLE);
+    comp_target_->SetRoot(visible ? comp_visual_.get() : nullptr);
     comp_->Commit();
 
     if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_PPV_ARGS(&d2d_factory_))))
@@ -202,6 +211,7 @@ void Renderer::ReleaseDeviceResources() {
     if (comp_target_) comp_target_->SetRoot(nullptr);
     if (comp_) comp_->Commit();
     comp_visual_.reset();
+    corner_clip_.reset();
     comp_target_.reset();
     comp_.reset();
     swapchain_.reset();
@@ -213,6 +223,51 @@ void Renderer::Shutdown() {
     StopFrameTimer();
     ReleaseDeviceResources();
     hwnd_ = nullptr;
+    composition_hwnd_ = nullptr;
+}
+
+void Renderer::SetCompositionVisible(bool visible) {
+    // 内容挂在父窗后不会随子窗自动隐藏，显式同步；计时器和输入仍归子窗。
+    if (composition_hwnd_ != hwnd_ && comp_target_ && comp_visual_ && comp_) {
+        comp_target_->SetRoot(visible ? comp_visual_.get() : nullptr);
+        comp_->Commit();
+    }
+}
+
+bool Renderer::SetCornerRadius(float radius_px) {
+    const float radius = std::isfinite(radius_px) ? std::max(0.0f, radius_px) : 0.0f;
+    if (corner_radius_ == radius) return true;
+    corner_radius_ = radius;
+    return UpdateCornerClip();
+}
+
+bool Renderer::UpdateCornerClip() {
+    if (!comp_ || !comp_visual_) return false;
+    HRESULT hr = S_OK;
+    if (corner_radius_ <= 0.0f) {
+        hr = comp_visual_->SetClip(static_cast<IDCompositionClip*>(nullptr));
+    } else {
+        if (!corner_clip_) hr = comp_->CreateRectangleClip(&corner_clip_);
+        const float radius = std::min(corner_radius_, std::min(width_, height_) * 0.5f);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetLeft(0.0f);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetTop(0.0f);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetRight(static_cast<float>(width_));
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetBottom(static_cast<float>(height_));
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetTopLeftRadiusX(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetTopLeftRadiusY(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetTopRightRadiusX(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetTopRightRadiusY(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetBottomLeftRadiusX(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetBottomLeftRadiusY(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetBottomRightRadiusX(radius);
+        if (SUCCEEDED(hr)) hr = corner_clip_->SetBottomRightRadiusY(radius);
+        if (SUCCEEDED(hr)) hr = comp_visual_->SetClip(corner_clip_.get());
+    }
+    if (SUCCEEDED(hr)) hr = comp_->Commit();
+    if (FAILED(hr))
+        Log(LogLevel::Error, L"Renderer corner clip failed target=%p size=%dx%d radiusPx=%.2f hr=0x%08lX",
+            composition_hwnd_, width_, height_, corner_radius_, hr);
+    return SUCCEEDED(hr);
 }
 
 void Renderer::Resize(int width_px, int height_px) {
@@ -220,6 +275,7 @@ void Renderer::Resize(int width_px, int height_px) {
     if (width_px == width_ && height_px == height_ && target_) return;   // 同尺寸：无需重建
     width_ = width_px;
     height_ = height_px;
+    if (!UpdateCornerClip()) device_lost_ = true;
     // 目标位图仍绑在 DC 上时 ResizeBuffers 会失败或丢掉后备缓冲，客户区变空。
     dc_->SetTarget(nullptr);
     target_.reset();
@@ -358,7 +414,7 @@ void Renderer::SetVisualTransform(const D2D1_MATRIX_3X2_F& matrix) {
 }
 
 bool Renderer::Recover() {
-    return Init(hwnd_, width_, height_);
+    return Init(hwnd_, width_, height_, composition_hwnd_);
 }
 
 } // namespace lumen

@@ -16,7 +16,9 @@ class Renderer {
 public:
     Renderer();
     ~Renderer();   // unique_ptr<LumaTextBridge> 需要完整类型，析构在 cpp 中定义
-    bool Init(HWND hwnd, int width_px, int height_px);
+    bool Init(HWND hwnd, int width_px, int height_px, HWND composition_hwnd = nullptr);
+    void SetCompositionVisible(bool visible);
+    bool SetCornerRadius(float radius_px);
     void Shutdown();
     void Resize(int width_px, int height_px);
 
@@ -46,6 +48,7 @@ public:
 
 private:
     bool CreateDeviceResources();
+    bool UpdateCornerClip();
     void ReleaseDeviceResources();
     bool CreateTargetBitmap();
     bool EnsureRetain();
@@ -54,7 +57,9 @@ private:
     static LONG flyout_depth_;
 
     HWND hwnd_ = nullptr;
+    HWND composition_hwnd_ = nullptr;
     int width_ = 0, height_ = 0;
+    float corner_radius_ = 0.0f;
     bool device_lost_ = false;
     bool ready_ = false;
     bool present_pending_ = false;
@@ -69,6 +74,7 @@ private:
     ComPtr<IDCompositionDevice> comp_;
     ComPtr<IDCompositionTarget> comp_target_;
     ComPtr<IDCompositionVisual> comp_visual_;
+    ComPtr<IDCompositionRectangleClip> corner_clip_;
     ComPtr<ID2D1Factory2> d2d_factory_;
     ComPtr<ID2D1Device1> d2d_device_;
     ComPtr<ID2D1DeviceContext2> dc_;

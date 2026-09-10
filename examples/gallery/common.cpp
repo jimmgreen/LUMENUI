@@ -176,22 +176,22 @@ lumen::StackPanel& Lumen(lumen::StackPanel& panel, float radius) {
 
 void PageHead(lumen::StackPanel& column, std::wstring_view title, std::wstring_view subtitle) {
     using namespace lumen;
-    column.Add<Label>(title, TextRole::Title).TextGlow(true);
+    column.Add<Label>(title, TextRole::Title).Wrap(true);
     if (!subtitle.empty()) {
         column.Add<Label>(subtitle, TextRole::Body).Secondary(true).Wrap(true);
     }
 }
 
 lumen::StackPanel& Sample(lumen::StackPanel& column, std::wstring_view title,
-                          std::wstring_view hint) {
+                          std::wstring_view hint, lumen::Panel::CardStyle style) {
     using namespace lumen;
     auto& wrap = column.Add<Column>().Spacing(8.0f);
-    wrap.Add<Label>(title, TextRole::CaptionStrong).Secondary(true);
+    wrap.Add<Label>(title, TextRole::BodyStrong).Wrap(true);
     if (!hint.empty()) {
         wrap.Add<Label>(hint, TextRole::Caption).Secondary(true).Wrap(true);
     }
     auto& body = wrap.Add<Column>();
-    Lumen(body, kCardRadius).Padding(20.0f, 16.0f).Spacing(12.0f).AlignCross(Cross::Start);
+    body.Card(style, kCardRadius).Padding(20.0f).Spacing(12.0f).AlignCross(Cross::Start);
     return body;
 }
 

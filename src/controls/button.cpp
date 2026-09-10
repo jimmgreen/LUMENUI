@@ -32,6 +32,7 @@ void Button::RebindCommand() {
 
 Button::Button(Button&& o) noexcept
     : ControlOf<Button>(std::move(o)),
+      role_(o.role_),
       text_(std::move(o.text_)),
       glyph_(std::move(o.glyph_)),
       kind_(o.kind_),
@@ -54,6 +55,7 @@ Button::Button(Button&& o) noexcept
 Button& Button::operator=(Button&& o) noexcept {
     if (this == &o) return *this;
     ControlOf<Button>::operator=(std::move(o));
+    role_ = o.role_;
     text_ = std::move(o.text_);
     glyph_ = std::move(o.glyph_);
     kind_ = o.kind_;
@@ -102,11 +104,7 @@ Metrics SizeMetrics(ButtonSize size) {
 
 constexpr float kPi = 3.14159265f;
 
-TextRole ButtonTextRole(ButtonSize size, ButtonKind kind) {
-    if (size == ButtonSize::Small) return TextRole::Caption;
-    if (kind == ButtonKind::Primary || kind == ButtonKind::Danger) return TextRole::BodyStrong;
-    return TextRole::Body;
-}
+
 
 } // namespace
 
@@ -114,7 +112,7 @@ Size Button::Measure(Size, const Theme& theme) {
     const Metrics m = SizeMetrics(size_);
     const float density = theme.button_height / 44.0f;
     const float min_h = height_override_ > 0.0f ? height_override_ : m.height * density;
-    const TextRole text_role = ButtonTextRole(size_, kind_);
+    const TextRole text_role = Role();
     if (glyph_.empty() && text_.empty()) return {min_h, min_h};
     if (!glyph_.empty() && text_.empty()) return {min_h, min_h};
     float width = m.pad_x * 2.0f;
@@ -185,7 +183,7 @@ bool Button::OnAnimate(float dt) {
 }
 
 void Button::Draw(Painter& painter, const Theme& theme) {
-    const TextRole text_role = ButtonTextRole(size_, kind_);
+    const TextRole text_role = Role();
     const bool solid = kind_ == ButtonKind::Primary || kind_ == ButtonKind::Danger;
     const bool electric = shimmer_ && enabled_ && !solid;
 
@@ -238,14 +236,14 @@ void Button::Draw(Painter& painter, const Theme& theme) {
             fill = {Lerp(fill.r, 1.0f, wash), Lerp(fill.g, 1.0f, wash),
                     Lerp(fill.b, 1.0f, wash), 1.0f};
             if (pressed_) fill = theme.fill_input_pressed;
-            border = Color{theme.accent.r, theme.accent.g, theme.accent.b,
-                           Lerp(0.20f, 1.0f, glow_t_) * theme.glow_intensity};
+            border = theme.control_stroke;
+            border.a = Lerp(border.a, theme.text_secondary.a, glow_t_);
             foreground = theme.text;
             hover_glow = 0.30f;
         } else {
             fill = theme.fill_input_disabled;
-            border = Color{theme.accent.r, theme.accent.g, theme.accent.b,
-                           0.08f * theme.glow_intensity};
+            border = theme.control_stroke;
+            border.a *= 0.4f;
             foreground = theme.text_disabled;
         }
         break;
@@ -269,7 +267,7 @@ void Button::Draw(Painter& painter, const Theme& theme) {
 
     if (electric) {
         fill = pressed_ ? theme.fill_input_pressed : theme.fill_input;
-        border = {};
+        border = theme.control_stroke;
         rest_glow = 0.0f;
         hover_glow = 0.0f;
         foreground = {theme.text.r, theme.text.g, theme.text.b,
@@ -309,7 +307,7 @@ void Button::Draw(Painter& painter, const Theme& theme) {
         const Rect ring = r.Inset(-1.0f, -1.0f);
         painter.StrokeRoundedRectSweep(ring, radius + 1.0f, shimmer_angle_, hot, tail, 1.5f);
     }
-    if (FocusVisible() && enabled_ && !solid) {
+    if (FocusVisible() && enabled_) {
         PaintFocusRing(painter, theme, r, radius);
     }
 

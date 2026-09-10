@@ -78,7 +78,7 @@ protected:
     void Cycle();
 
     std::wstring text_;
-    TextRole role_ = TextRole::BodyStrong;
+    TextRole role_ = TextRole::Body;
     CheckState state_ = CheckState::Unchecked;
     bool three_state_ = false;
     Signal<bool> toggled_;

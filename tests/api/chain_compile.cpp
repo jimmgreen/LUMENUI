@@ -79,6 +79,34 @@ int main() {
               lumen::TextRoleStyle(lumen::TextRole::Mono).size == 12.0f &&
               lumen::TextRoleStyle(lumen::TextRole::Icon).size == 16.0f,
           "text role size contract");
+    {
+        lumen::Button compact(L"Pick", lumen::ButtonKind::Primary);
+        compact.SizeClass(lumen::ButtonSize::Small);
+        Check(compact.Role() == lumen::TextRole::CaptionStrong,
+              "small primary keeps compact size and emphasis");
+        compact.Role(lumen::TextRole::Caption);
+        lumen::Button moved(std::move(compact));
+        Check(moved.Role() == lumen::TextRole::Caption, "button move keeps explicit typography");
+        lumen::Button assigned;
+        assigned = std::move(moved);
+        Check(assigned.Role() == lumen::TextRole::Caption, "button move assignment keeps typography");
+        lumen::TextBox input;
+        input.Role(lumen::TextRole::Caption);
+        Check(input.PlaceholderRole() == input.Role(), "placeholder follows input typography");
+        input.PlaceholderRole(lumen::TextRole::BodyStrong);
+        input.Role(lumen::TextRole::Body);
+        Check(input.PlaceholderRole() == lumen::TextRole::BodyStrong, "explicit placeholder role survives content change");
+        lumen::NumberBox number;
+        number.Role(lumen::TextRole::Caption).Value(12);
+        Check(number.Role() == lumen::TextRole::Caption && number.PlaceholderRole() == number.Role(),
+              "number typography override reaches effective content role");
+        lumen::DropDownButton dropdown;
+        dropdown.Role(lumen::TextRole::Caption).SizeClass(lumen::ButtonSize::Large);
+        Check(dropdown.Role() == lumen::TextRole::Caption, "dropdown size does not discard explicit text role");
+        lumen::ToggleButton toggle;
+        toggle.Role(lumen::TextRole::Caption).Checked(true);
+        Check(toggle.Role() == lumen::TextRole::Caption, "toggle state preserves typography");
+    }
     lumen::Column host;
     host.Add<lumen::TextBox>().Placeholder(L"hint").PlaceholderRole(lumen::TextRole::Caption);
     host.Add<lumen::TextBox>().Text(L"top;bottom").Select(4, 10).OnFocused([](bool) {});

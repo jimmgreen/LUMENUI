@@ -27,9 +27,9 @@ float FooterButtonWidth(Button& btn, LumaTextBridge* luma) {
                       180.0f);
 }
 
-float TitleBlockH(LumaTextBridge* luma, std::wstring_view title) {
+float TitleBlockH(LumaTextBridge* luma, std::wstring_view title, float inner_w) {
     const std::wstring_view probe = title.empty() ? L"Ag" : title;
-    return std::max(kTitleMinH, MeasureUiText(probe, TextRole::Title, 0.0f, luma).h);
+    return std::max(kTitleMinH, MeasureWrappedHeight(probe, TextRole::Title, inner_w, luma));
 }
 
 float MessageBlockH(LumaTextBridge* luma, std::wstring_view message, float inner_w) {
@@ -39,7 +39,7 @@ float MessageBlockH(LumaTextBridge* luma, std::wstring_view message, float inner
 
 float BodyStartY(LumaTextBridge* luma, std::wstring_view title, std::wstring_view message,
                  float inner_w) {
-    float y = kTitleTop + TitleBlockH(luma, title) + kGapTitleMessage;
+    float y = kTitleTop + TitleBlockH(luma, title, inner_w) + kGapTitleMessage;
     if (!message.empty()) y += MessageBlockH(luma, message, inner_w) + kGapAfterMessage;
     return y;
 }
@@ -348,11 +348,11 @@ void Dialog::PopChildDraw(Painter& painter) const { PopEnter(painter); }
 void Dialog::Draw(Painter& painter, const Theme& theme) {
     PushEnter(painter);
     const float radius = theme.radius_card;
-    DrawElevated(painter, theme, absolute_, radius, Elevation::Modal, theme.fill_input);
+    DrawElevated(painter, theme, absolute_, radius, Elevation::Modal, theme.surface_flyout);
     LumaTextBridge* luma = WindowImpl::LumaOf(window_);
     const float inner_w = std::max(0.0f, absolute_.w - kCardPad * 2.0f);
-    const float title_h = TitleBlockH(luma, title_);
-    painter.DrawText(title_,
+    const float title_h = TitleBlockH(luma, title_, inner_w);
+    painter.DrawTextWrapped(title_,
                      {absolute_.x + kCardPad, absolute_.y + kTitleTop, inner_w, title_h},
                      TextRole::Title, theme.text);
     if (!message_.empty()) {

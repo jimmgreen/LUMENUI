@@ -1,7 +1,9 @@
 from pathlib import Path
 
+root = Path(__file__).resolve().parents[1]
+
 # TitleBar::Status skip no-op invalidate
-p = Path(r".\include\lumen\TitleBar.h")
+p = root / "include" / "lumen" / "TitleBar.h"
 t = p.read_text(encoding="utf-8")
 old = """    TitleBar& Status(std::wstring_view text) {
         status_ = text;
@@ -21,7 +23,7 @@ if old not in t:
 p.write_text(t.replace(old, new, 1), encoding="utf-8", newline="\n")
 
 # UpdatePerfHud only push on change
-p = Path(r".\src\core\window_impl.cpp")
+p = root / "src" / "core" / "window_impl.cpp"
 t = p.read_text(encoding="utf-8")
 if "#include <cstdio>" not in t:
     t = t.replace("#include <vector>", "#include <vector>\n#include <cstdio>\n#include <typeinfo>")
@@ -50,7 +52,7 @@ new = r"""    Control& root_control = *root_;
         if (!dumped) {
             dumped = true;
             FILE* f = nullptr;
-            fopen_s(&f, ".\\build\\hit.log", "w");
+            fopen_s(&f, "build/hit.log", "w");
             if (f) {
                 fprintf(f, "scale=%.3f caption=%.1f client=%.0fx%.0f chrome=%.1f\n",
                         scale_, chrome, w, h, chrome);
@@ -93,7 +95,7 @@ p.write_text(t, encoding="utf-8", newline="\n")
 print("patched window_impl + TitleBar Status")
 
 # Splitter measure cap
-p = Path(r".\src\controls\splitter.cpp")
+p = root / "src" / "controls" / "splitter.cpp"
 t = p.read_text(encoding="utf-8")
 old = """Size Splitter::Measure(Size available, const Theme&) {
     if (orientation_ == Orientation::Vertical) {

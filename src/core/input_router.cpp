@@ -357,7 +357,9 @@ bool WindowImpl::OnKeyDown(uint32_t vk) {
         }
         return false;
     }
-    if (focused_ && focused_->OnKey(vk)) return true;
+    // 显式 Esc 绑定承担窗口取消；组字和弹层仍优先消费，普通编辑器不能吞掉关闭。
+    if (vk == VK_ESCAPE && !active_busy_ && !active_dialog_ &&
+        !active_drawer_ && !active_flyout_ && TryShortcuts(vk)) return true;
     if (vk == VK_ESCAPE && active_busy_) {
         active_busy_->OnKey(vk);
         return true;
@@ -374,6 +376,7 @@ bool WindowImpl::OnKeyDown(uint32_t vk) {
         active_dialog_->OnKey(vk);
         return true;
     }
+    if (focused_ && focused_->OnKey(vk)) return true;
     if (vk == VK_RETURN && active_dialog_) {
         active_dialog_->OnKey(vk);
         return true;
@@ -437,7 +440,7 @@ bool WindowImpl::TryShortcuts(uint32_t vk) {
         uint32_t want = 0;
         bool ctrl = false, shift = false, alt = false;
         if (!ParseChord(chord, want, ctrl, shift, alt)) return true;
-        return !ctrl && !alt;
+        return !ctrl && !alt && want != VK_ESCAPE;
     };
     for (const Shortcut& slot : shortcuts_) {
         if (chord_blocked(slot.chord)) continue;

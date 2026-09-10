@@ -15,6 +15,9 @@ namespace lumen {
 
 class DropDownButton : public ControlOf<DropDownButton> {
 public:
+    TextRole Role() const noexcept { return role_.value_or(ButtonTextRole(size_, kind_)); }
+    DropDownButton& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     DropDownButton() = default;
     explicit DropDownButton(std::wstring_view text, ButtonKind kind = ButtonKind::Standard)
         : text_(text), kind_(kind) {}
@@ -34,7 +37,7 @@ public:
     ButtonKind Kind() const noexcept { return kind_; }
     DropDownButton& Kind(ButtonKind value) {
         kind_ = value;
-        Invalidate();
+        RelayoutParent();
         return *this;
     }
     ButtonSize SizeClass() const noexcept { return size_; }
@@ -66,6 +69,7 @@ public:
     void Open();
 
 protected:
+    std::optional<TextRole> role_;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;

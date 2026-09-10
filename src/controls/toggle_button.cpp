@@ -20,9 +20,7 @@ Metrics SizeMetrics(ButtonSize size) {
     default: return {44.0f, 24.0f};
     }
 }
-TextRole RoleOf(ButtonSize size) {
-    return size == ButtonSize::Small ? TextRole::Caption : TextRole::Body;
-}
+
 }  // namespace
 
 ToggleButton& ToggleButton::Checked(bool value) {
@@ -40,7 +38,7 @@ void ToggleButton::Toggle() {
 
 Size ToggleButton::Measure(Size, const Theme&) {
     const Metrics m = SizeMetrics(size_);
-    const TextRole role = RoleOf(size_);
+    const TextRole role = Role();
     if (glyph_.empty() && text_.empty()) return {m.height, m.height};
     if (!glyph_.empty() && text_.empty()) return {m.height, m.height};
     float width = m.pad_x * 2.0f;
@@ -94,7 +92,7 @@ bool ToggleButton::OnAnimate(float dt) {
 }
 
 void ToggleButton::Draw(Painter& painter, const Theme& theme) {
-    const TextRole role = RoleOf(size_);
+    const TextRole role = Role();
     const float shrink = 0.02f * scale_t_;
     const Rect r = scale_t_ > 0.001f
                        ? absolute_.Inset(absolute_.w * shrink * 0.5f, absolute_.h * shrink * 0.5f)

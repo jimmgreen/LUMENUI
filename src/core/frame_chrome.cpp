@@ -64,12 +64,14 @@ void WindowImpl::ApplyClientChrome() {
     if (parent_ || frame_ != Frame::Client || !hwnd_) return;
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-    const DWORD corner = DWMWCP_ROUND;
+    const DWORD corner = corner_radius_ > 0.0f ? DWMWCP_DONOTROUND : DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
     const COLORREF border = DWMWA_COLOR_NONE;
     DwmSetWindowAttribute(hwnd_, DWMWA_BORDER_COLOR, &border, sizeof(border));
     const MARGINS margins{-1, -1, -1, -1};
     DwmExtendFrameIntoClientArea(hwnd_, &margins);
+    const DWMNCRENDERINGPOLICY policy = corner_radius_ > 0.0f ? DWMNCRP_DISABLED : DWMNCRP_ENABLED;
+    DwmSetWindowAttribute(hwnd_, DWMWA_NCRENDERING_POLICY, &policy, sizeof(policy));
     SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
@@ -96,6 +98,20 @@ LRESULT WindowImpl::CaptionButtonAt(POINT client_px) const {
 
 LRESULT WindowImpl::HitTestFrame(LPARAM lparam) const {
     POINT screen{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    if (corner_radius_ > 0.0f && !IsZoomed(FrameHwnd())) {
+        POINT client = screen;
+        ScreenToClient(hwnd_, &client);
+        const float radius = std::min(corner_radius_ * scale_,
+                                      std::min(client_w_, client_h_) * 0.5f);
+        const float x = static_cast<float>(client.x);
+        const float y = static_cast<float>(client.y);
+        if (radius > 0.0f && x >= 0.0f && y >= 0.0f && x < client_w_ && y < client_h_) {
+            const float dx = x - std::clamp(x, radius, client_w_ - radius);
+            const float dy = y - std::clamp(y, radius, client_h_ - radius);
+            // 透明角区不拦住宿主输入；命中轮廓与合成裁剪使用同一半径和 DPI。
+            if (dx * dx + dy * dy > radius * radius) return HTTRANSPARENT;
+        }
+    }
     if ((!parent_ || frame_target_) && !IsZoomed(FrameHwnd())) {
         RECT window{};
         GetWindowRect(hwnd_, &window);

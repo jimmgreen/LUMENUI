@@ -47,7 +47,8 @@ class WindowImpl {
 public:
     WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame,
                HWND owner = nullptr, bool title_bar = true, HWND match_dpi_hwnd = nullptr,
-               HWND parent = nullptr, HWND frame_target = nullptr);
+               HWND parent = nullptr, HWND frame_target = nullptr, bool compose_to_frame = false,
+               float corner_radius = 0.0f);
     ~WindowImpl();
 
     // 控件基类经 Window API 转发的内部通道。
@@ -281,6 +282,7 @@ private:
     HWND frame_target_ = nullptr;
     HWND FrameHwnd() const noexcept { return frame_target_ ? frame_target_ : hwnd_; }
     Frame frame_ = Frame::System;
+    float corner_radius_ = 0.0f;
     float scale_ = 1.0f;
     int client_w_ = 0, client_h_ = 0;   // 物理像素
     Size min_size_dip_{0.0f, 0.0f};

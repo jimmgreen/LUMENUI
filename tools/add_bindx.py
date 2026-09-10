@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-root = Path(r".\include\lumen")
+root = Path(__file__).resolve().parents[1] / "include" / "lumen"
 skip = {"Signal.h", "Control.h", "ControlOf.h", "win_undef.h", "lumen.h"}
 
 def insert_binds(text: str) -> str:

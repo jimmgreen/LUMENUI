@@ -23,6 +23,24 @@ constexpr CLSID kSaturationClsid{0x5cb2d9cf, 0x327d, 0x459f, {0xa0, 0xce, 0x40, 
 D2D1_COLOR_F ToD2D(Color c) { return {c.r, c.g, c.b, c.a}; }
 D2D1_RECT_F ToD2D(const Rect& r) { return {r.x, r.y, r.Right(), r.Bottom()}; }
 
+// Keep dim alpha ramps in float precision until compositing into the target.
+// An 8-bit gradient lookup quantizes the light before the final surface does.
+ID2D1GradientStopCollection* LightStops(ID2D1DeviceContext2* dc,
+                                      const D2D1_GRADIENT_STOP* ramp, UINT count) {
+    ID2D1GradientStopCollection1* precise = nullptr;
+    if (dc->IsBufferPrecisionSupported(D2D1_BUFFER_PRECISION_16BPC_FLOAT) &&
+        SUCCEEDED(dc->CreateGradientStopCollection(
+            ramp, count, D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SCRGB,
+            D2D1_BUFFER_PRECISION_16BPC_FLOAT, D2D1_EXTEND_MODE_CLAMP,
+            D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT, &precise))) {
+        return precise;
+    }
+    ID2D1GradientStopCollection* fallback = nullptr;
+    dc->CreateGradientStopCollection(ramp, count, D2D1_GAMMA_1_0,
+                                     D2D1_EXTEND_MODE_CLAMP, &fallback);
+    return fallback;
+}
+
 uint32_t PackColor(Color c) {
     auto q = [](float v) {
         uint32_t x = static_cast<uint32_t>(Clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
@@ -477,25 +495,20 @@ ID2D1RadialGradientBrush* Painter::RadialBrush(Color inner, Color outer, float i
         for (auto& entry : radial_brushes_) entry.second->Release();
         radial_brushes_.clear();
     }
-    ID2D1GradientStopCollection* stops = nullptr;
     auto mix = [&](float t) {
         t = Clamp(t, 0.0f, 1.0f);
         const float s = t * t * (3.0f - 2.0f * t);
         return Color{Lerp(inner.r, outer.r, s), Lerp(inner.g, outer.g, s),
                      Lerp(inner.b, outer.b, s), Lerp(inner.a, outer.a, s)};
     };
-    const D2D1_GRADIENT_STOP ramp[7] = {
-        {0.0f, ToD2D(inner)},
-        {stop * 0.12f, ToD2D(mix(0.08f))},
-        {stop * 0.28f, ToD2D(mix(0.22f))},
-        {stop * 0.48f, ToD2D(mix(0.45f))},
-        {stop * 0.68f, ToD2D(mix(0.70f))},
-        {stop * 0.86f, ToD2D(mix(0.90f))},
-        {stop, ToD2D(outer)}};
-    if (FAILED(dc_->CreateGradientStopCollection(ramp, 7, D2D1_GAMMA_1_0, D2D1_EXTEND_MODE_CLAMP,
-                                                 &stops))) {
-        return nullptr;
+    // Dense smoothstep samples avoid visible slope changes at sparse stops.
+    D2D1_GRADIENT_STOP ramp[65];
+    for (UINT i = 0; i < 65; ++i) {
+        const float t = static_cast<float>(i) / 64.0f;
+        ramp[i] = {stop * t, ToD2D(mix(t))};
     }
+    ID2D1GradientStopCollection* stops = LightStops(dc_, ramp, 65);
+    if (!stops) return nullptr;
     D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES props{};
     props.radiusX = props.radiusY = 1.0f;
     ID2D1RadialGradientBrush* brush = nullptr;

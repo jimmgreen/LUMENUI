@@ -51,7 +51,7 @@ lumen_add_executable(myapp main.cpp app.rc)
 include(FetchContent)
 FetchContent_Declare(lumen
     GIT_REPOSITORY https://github.com/jimmgreen/LUMENUI.git
-    GIT_TAG v0.2.0)
+    GIT_TAG v0.3.0)
 FetchContent_MakeAvailable(lumen)
 lumen_add_executable(myapp main.cpp app.rc)
 

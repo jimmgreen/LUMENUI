@@ -7,3 +7,12 @@ out/
 *.png
 !docs/**/*.png
 !docs/**/*.jpg
+
+# Local credentials and private key material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12

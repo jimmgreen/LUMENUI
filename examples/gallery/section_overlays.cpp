@@ -26,7 +26,7 @@ void BuildOverlays(lumen::StackPanel& column, lumen::Window& window) {
     auto& dialog = Sample(column, L"Dialog",
                           L"Content between title and footer. Enter = default, Esc = cancel. "
                           L"Result toast. Compact 320 / Standard 420 / Wide 560.");
-    auto& dialog_row = dialog.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
+    auto& dialog_row = dialog.Add<WrapPanel>().Gap(8.0f, 8.0f).FillCross();
     dialog_row.Add<Button>(L"Add Component", ButtonKind::Primary).OnClick([&window] {
         ShowDialog(window);
     });
@@ -58,11 +58,11 @@ void BuildOverlays(lumen::StackPanel& column, lumen::Window& window) {
     dialog_row.Add<Button>(L"Wide · 3 buttons").OnClick([&window] { window.ShowDialog(g_wide); });
     if (g_confirm.Title().empty()) {
         g_confirm.CardSize(DialogSize::Compact)
-            .Title(L"Delete file")
-            .Message(L"Compact card. Enter deletes. Esc cancels.")
+            .Title(L"Delete draft notes?")
+            .Message(L"This demo removes draft notes from the current session. Saved project files are unaffected.")
             .SecondaryButton(L"Cancel")
-            .PrimaryButton(L"Delete")
-            .DefaultButton(DialogCommand::Primary)
+            .PrimaryButton(L"Delete draft")
+            .DefaultButton(DialogCommand::Secondary)
             .CancelButton(DialogCommand::Secondary)
             .OnResult([&window](DialogResult r) {
                 if (r == DialogResult::Primary) window.ShowToast(L"Deleted");

@@ -16,6 +16,8 @@ enum class TextSyncResult { Unchanged, Applied, Conflict };
 
 class TextBox : public ControlOf<TextBox> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    TextBox& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
     TextBox() = default;
     explicit TextBox(std::wstring_view text) : text_(text) {}
 
@@ -34,8 +36,8 @@ public:
         Invalidate();
         return *this;
     }
-    TextBox& PlaceholderRole(TextRole role) { placeholder_role_ = role; Invalidate(); return *this; }
-    TextRole PlaceholderRole() const noexcept { return placeholder_role_; }
+    TextBox& PlaceholderRole(TextRole role) { placeholder_role_ = role; placeholder_role_explicit_ = true; Invalidate(); return *this; }
+    TextRole PlaceholderRole() const noexcept { return placeholder_role_explicit_ ? placeholder_role_ : ContentRole(); }
     const std::wstring& Glyph() const noexcept { return glyph_; }
     TextBox& Glyph(std::wstring_view value) {
         glyph_ = value;
@@ -99,6 +101,7 @@ public:
     bool Composing() const noexcept { return ime_session_; }
 
 protected:
+    TextRole role_ = TextRole::Body;
     uint64_t revision_ = 0;
     Signal<bool> composing_changed_;
     friend class WindowImpl;
@@ -158,7 +161,7 @@ protected:
     void DrawComposition(Painter& painter, const Theme& theme, float x, float text_y, float text_h,
                          float band_y, float band_h) const;
     virtual bool PaintChrome() const noexcept { return true; }
-    virtual TextRole ContentRole() const noexcept { return TextRole::Body; }
+    virtual TextRole ContentRole() const noexcept { return role_; }
     virtual float PadLeft() const;
     float PadTop() const;
     // 右侧内容留白；内嵌尾部控件（NumberBox spin 区）的子类覆写收窄文本区。
@@ -194,6 +197,7 @@ protected:
     std::wstring input_mask_;
     std::wstring placeholder_;
     TextRole placeholder_role_ = TextRole::Body;
+    bool placeholder_role_explicit_ = false;
     std::wstring glyph_;
     std::wstring ime_comp_;
     bool ime_session_ = false;

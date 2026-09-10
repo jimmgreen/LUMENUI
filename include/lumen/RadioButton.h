@@ -12,6 +12,8 @@ namespace lumen {
 
 class RadioButton : public ControlOf<RadioButton> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    RadioButton& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
     RadioButton() = default;
     explicit RadioButton(std::wstring_view text) : text_(text) {}
 
@@ -37,6 +39,7 @@ public:
     }
 
 protected:
+    TextRole role_ = TextRole::Body;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;

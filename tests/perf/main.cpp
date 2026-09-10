@@ -170,14 +170,20 @@ int main() {
     }
 
     std::vector<double> frame_ms;
+    std::vector<double> draw_ms, submit_ms;
     frame_ms.reserve(kFrames);
+    draw_ms.reserve(kFrames);
+    submit_ms.reserve(kFrames);
     for (int i = 0; i < kFrames; ++i) {
         const auto start = std::chrono::steady_clock::now();
         painter.FillRect({0, 0, static_cast<float>(kW), static_cast<float>(kH)}, theme.bg);
         DrawControlTree(painter, theme, &root);
+        const auto drawn = std::chrono::steady_clock::now();
         const bool ok = renderer.EndDraw();
         const auto end = std::chrono::steady_clock::now();
         frame_ms.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+        draw_ms.push_back(std::chrono::duration<double, std::milli>(drawn - start).count());
+        submit_ms.push_back(std::chrono::duration<double, std::milli>(end - drawn).count());
         if (!ok) { std::printf("[FAIL] present\n"); return 1; }
         dc = renderer.BeginDraw();
         painter.BeginFrame(dc, &UiText(), 1.0f);
@@ -200,6 +206,17 @@ int main() {
     const double avg = Mean(frame_ms);
     double worst = 0.0;
     for (double v : frame_ms) worst = std::max(worst, v);
+    auto sorted = frame_ms;
+    std::sort(sorted.begin(), sorted.end());
+    const auto percentile = [&](double p) { return sorted[static_cast<size_t>(p * (sorted.size() - 1))]; };
+    std::printf("CPU wall submission (not GPU completion): p50=%.3f p95=%.3f p99=%.3f over8=%zu/%d draw_avg=%.3f enddraw_avg=%.3f ms\n",
+        percentile(.50), percentile(.95), percentile(.99),
+        static_cast<size_t>(std::count_if(frame_ms.begin(), frame_ms.end(), [](double v) { return v >= 8.0; })),
+        kFrames, Mean(draw_ms), Mean(submit_ms));
+    for (size_t i = 0; i < frame_ms.size(); ++i) {
+        if (frame_ms[i] >= 8.0)
+            std::printf("slow frame=%zu total=%.3f draw=%.3f enddraw=%.3f ms\n", i, frame_ms[i], draw_ms[i], submit_ms[i]);
+    }
 
     std::printf("场景：1280x800，8 按钮 + 100,000 行虚拟列表 + 聚光卡 + Area/Heatmap，全帧重绘 %d 帧\n",
                 kFrames);

@@ -21,11 +21,7 @@ Metrics SizeMetrics(ButtonSize size) {
     }
 }
 
-TextRole ButtonTextRole(ButtonSize size, ButtonKind kind) {
-    if (size == ButtonSize::Small) return TextRole::Caption;
-    if (kind == ButtonKind::Primary || kind == ButtonKind::Danger) return TextRole::BodyStrong;
-    return TextRole::Body;
-}
+
 
 constexpr float kChevron = 10.0f;
 constexpr float kChevronGap = 8.0f;
@@ -41,7 +37,7 @@ void DropDownButton::Open() {
 
 Size DropDownButton::Measure(Size, const Theme&) {
     const Metrics m = SizeMetrics(size_);
-    const TextRole role = ButtonTextRole(size_, kind_);
+    const TextRole role = Role();
     float width = m.pad_x * 2.0f + kChevronGap + kChevron;
     if (!glyph_.empty()) width += 16.0f + 6.0f;
     if (!text_.empty()) width += MeasureText(text_, role).w;
@@ -99,7 +95,7 @@ bool DropDownButton::OnAnimate(float dt) {
 }
 
 void DropDownButton::Draw(Painter& painter, const Theme& theme) {
-    const TextRole role = ButtonTextRole(size_, kind_);
+    const TextRole role = Role();
     const bool solid = kind_ == ButtonKind::Primary || kind_ == ButtonKind::Danger;
     const Metrics m = SizeMetrics(size_);
 

@@ -30,8 +30,9 @@ Size Switch::Measure(Size, const Theme&) {
 }
 
 bool Switch::OnAnimate(float dt_seconds) {
-    return EaseTo(knob_t_, checked_ ? 1.0f : 0.0f, dt_seconds, 14.0f) ||
-           Control::OnAnimate(dt_seconds);
+    bool active = Control::OnAnimate(dt_seconds);
+    active |= EaseTo(knob_t_, checked_ ? 1.0f : 0.0f, dt_seconds, 14.0f);
+    return active;
 }
 
 void Switch::Draw(Painter& painter, const Theme& theme) {
@@ -54,14 +55,14 @@ void Switch::Draw(Painter& painter, const Theme& theme) {
     Color border = theme.control_stroke;
     border.a *= (1.0f - t) * (enabled_ ? (hovered_ ? 1.0f : 0.85f) : 0.4f);
 
-    if (t > 0.04f && enabled_) {
-        Color glow = theme.glow_md;
+    if (t > 0.04f && enabled_ && (hovered_ || FocusVisible())) {
+        Color glow = theme.glow_sm;
         glow.a *= t;
         painter.DrawGlow(track, radius, glow);
     }
     painter.FillRoundedRect(track, radius, track_fill);
     if (border.a > 0.004f) painter.StrokeRoundedRect(track, radius, border);
-    if (focused_ && enabled_) {
+    if (FocusVisible() && enabled_) {
         PaintFocusRing(painter, theme, track, radius);
     }
 

@@ -8,6 +8,7 @@
 #include "Signal.h"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lumen {
@@ -21,8 +22,19 @@ enum class ButtonKind { Standard, Primary, Subtle, Transparent, Danger };
 
 enum class ButtonSize { Small, Medium, Large };
 
+inline constexpr TextRole ButtonTextRole(ButtonSize size, ButtonKind kind) noexcept {
+    const bool strong = kind == ButtonKind::Primary || kind == ButtonKind::Danger;
+    if (size == ButtonSize::Small)
+        return strong ? TextRole::CaptionStrong : TextRole::Caption;
+    return strong ? TextRole::BodyStrong : TextRole::Body;
+}
+
+
 class Button : public ControlOf<Button> {
 public:
+    TextRole Role() const noexcept { return role_.value_or(ButtonTextRole(size_, kind_)); }
+    Button& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     Button() = default;
     explicit Button(std::wstring_view text, ButtonKind kind = ButtonKind::Standard)
         : text_(text), kind_(kind) {}
@@ -40,8 +52,8 @@ public:
     const std::wstring& Glyph() const noexcept { return glyph_; }
     Button& Glyph(std::wstring_view value) { glyph_ = value; RelayoutParent(); return *this; }
     ButtonKind Kind() const noexcept { return kind_; }
-    Button& Kind(ButtonKind value) { kind_ = value; Invalidate(); return *this; }
-    // 尺寸变体：Small 40（幽灵图标/行内操作）/ Medium·Large 44（px-6 py-2.5 + 16px 字）。
+    Button& Kind(ButtonKind value) { kind_ = value; RelayoutParent(); return *this; }
+    // 尺寸变体：Small 40 DIP / Medium·Large 44 DIP；默认文字分别为 12 / 14 DIP。
     ButtonSize SizeClass() const noexcept { return size_; }
     Button& SizeClass(ButtonSize value) { size_ = value; RelayoutParent(); return *this; }
     // 实例级高度覆盖（DIP）：0 = 跟随尺寸档。用于个别紧凑位置，不动全局规格。
@@ -61,6 +73,7 @@ public:
     Button& Bind(Command& command);
 
 protected:
+    std::optional<TextRole> role_;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;

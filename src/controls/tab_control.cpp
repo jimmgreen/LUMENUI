@@ -314,11 +314,12 @@ int TabControl::DropSlotAt(Point local, const Theme& theme) {
     return static_cast<int>(items_.size());
 }
 
-Size TabControl::Measure(Size, const Theme&) {
-    static const Theme kGeometryDefault{};
+Size TabControl::Measure(Size available, const Theme& theme) {
     float page_w = 0.0f, page_h = 0.0f;
+    const Size page_available{available.w, 1.0e5f};
     for (size_t i = 0; i < children_.size(); ++i) {
-        const Size desired = MeasureChildAt(i, {1.0e5f, 1.0e5f}, kGeometryDefault);
+        if (!ChildVisible(i)) continue;
+        const Size desired = MeasureChildAt(i, page_available, theme);
         page_w = std::max(page_w, desired.w);
         page_h = std::max(page_h, desired.h);
     }

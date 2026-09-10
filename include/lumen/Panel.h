@@ -76,6 +76,7 @@ public:
     // 按 token 风格设置卡片（颜色取自当前主题，随光效强度更新）。
     // Lumen = 聚光卡片：鼠标跟随光斑 + 边缘折射光环（自动开启聚光）。
     enum class CardStyle { Flyout, Input, Subtle, Lumen };
+    // Only Lumen enables spotlight by default; override after Card with Spotlight(bool).
     Panel& Card(CardStyle style, float radius);
 
     // 空区点击（子控件优先命中）。用于整卡可点的展示面。

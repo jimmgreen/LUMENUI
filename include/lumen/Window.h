@@ -161,6 +161,11 @@ struct WindowSpec {
     // 嵌入时可指定外壳：Client 标题栏动作与 Resize 路由此外壳，外壳负责布局、关闭与阴影。
     // 外壳 WM_GETMINMAXINFO 转发给子窗以应用 MinSize；键盘预处理须让子窗及其 IME 消息通过。
     void* frameTarget = nullptr;
+    // 内容直接合成到外壳，由同一 HWND 裁剪内容和外轮廓。仅 parent == frameTarget 时使用。
+    // 子窗须始终铺满外壳客户区；独占其顶层 DComp 槽，外壳存活期间不可另挂同层内容。
+    bool composeToFrame = false;
+    // Client 窗口整体内容的圆角半径（DIP）；0 保持系统轮廓。嵌入时外壳须关闭原生边框渲染。
+    float cornerRadius = 0.0f;
 };
 
 class Window {
@@ -320,7 +325,7 @@ public:
     TimerId SetTimeout(float seconds, std::function<void()> fn);
     void ClearTimer(TimerId id);
 
-    // 窗口加速键。焦点在 IME 行内编辑且和弦无 Ctrl/Alt 时让行。
+    // 窗口加速键。行内编辑时无 Ctrl/Alt 的快捷键让行；Esc 绑定优先于普通编辑，组字和弹层优先于 Esc。
     void BindShortcut(std::wstring_view chord, std::function<void()> fn);
     void Bind(Command& command);
 

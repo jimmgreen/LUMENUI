@@ -53,7 +53,8 @@ void CheckBox::Draw(Painter& painter, const Theme& theme) {
     if (on) {
         const Color fill = enabled_ ? theme.accent
                                     : Color{theme.accent.r, theme.accent.g, theme.accent.b, 0.16f};
-        if (enabled_) painter.DrawGlow(box, kRadius, theme.glow_md, kGlowSpread);
+        if (enabled_ && (hovered_ || FocusVisible()))
+            painter.DrawGlow(box, kRadius, theme.glow_sm, kGlowSpread);
         painter.FillRoundedRect(box, kRadius, fill);
         painter.StrokeRoundedRect(box, kRadius, enabled_ ? theme.accent : fill);
         const Color mark = enabled_ ? theme.accent_text : Color{0.0f, 0.0f, 0.0f, 0.45f};
@@ -68,10 +69,9 @@ void CheckBox::Draw(Painter& painter, const Theme& theme) {
                               kCheckStroke);
         }
     } else {
-        const Color border =
-            Color{theme.accent.r, theme.accent.g, theme.accent.b,
-                  (enabled_ ? (hovered_ ? 0.60f : 0.30f) : 0.16f) * theme.glow_intensity};
-        painter.FillRoundedRect(box, kRadius, theme.bg);
+        Color border = theme.control_stroke;
+        border.a *= enabled_ ? (hovered_ ? 2.0f : 1.0f) : 0.4f;
+        painter.FillRoundedRect(box, kRadius, enabled_ && hovered_ ? theme.fill_input_hover : theme.fill_input);
         painter.StrokeRoundedRect(box, kRadius, border);
         if (enabled_ && hovered_) {
             Color hover_glow = theme.glow_sm;
@@ -79,13 +79,12 @@ void CheckBox::Draw(Painter& painter, const Theme& theme) {
             painter.DrawGlow(box, kRadius, hover_glow, 0.40f);
         }
     }
-    if (focused_ && enabled_) {
+    if (FocusVisible() && enabled_) {
         PaintFocusRing(painter, theme, box, kRadius);
     }
 
     if (!text_.empty()) {
-        const Color label = enabled_ ? (on ? theme.text : theme.text_secondary)
-                                     : theme.text_disabled;
+        const Color label = enabled_ ? theme.text : theme.text_disabled;
         painter.DrawText(text_,
                          {absolute_.x + kBoxSize + kGap, absolute_.y,
                            MeasureText(text_, role_).w, absolute_.h},

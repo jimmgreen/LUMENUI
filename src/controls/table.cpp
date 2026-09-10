@@ -2507,7 +2507,7 @@ void Table::Prepare(Painter& painter, const Theme& theme) {
         for (size_t k = 0; k < sort_keys_.size(); ++k) if (sort_keys_[k].col == static_cast<int>(c)) rank = static_cast<int>(k);
         painter.PrepareText(columns_[c].title,
             {absolute_.x + xs[c] + kCellPadX, absolute_.y, ws[c] - kCellPadX * 2 - kPinSlot, header_h},
-            TextRole::CaptionStrong, rank >= 0 ? theme.text : theme.text_secondary);
+            TextRole::CaptionStrong, theme.text);
         if (rank >= 0 && sort_keys_.size() > 1) {
             const wchar_t text[] = {static_cast<wchar_t>(L'1' + rank), 0};
             painter.PrepareText(text, {absolute_.x + xs[c] + ws[c] - kPinSlot - 22,
@@ -2635,7 +2635,7 @@ void Table::Draw(Painter& painter, const Theme& theme) {
                 painter.DrawText(columns_[c].title,
                                  {absolute_.x + xs[c] + kCellPadX, header.y, cell_w, header.h},
                                  TextRole::CaptionStrong,
-                                 sort_rank >= 0 ? theme.text : theme.text_secondary);
+                                 theme.text);
             }
             if (sort_rank >= 0 && sort_keys_.size() > 1) {
                 const wchar_t rank[] = {static_cast<wchar_t>(L'1' + sort_rank), 0};

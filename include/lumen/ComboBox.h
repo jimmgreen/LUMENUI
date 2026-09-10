@@ -23,6 +23,8 @@ struct ComboGroup {
 
 class ComboBox : public PanelOf<ComboBox> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    ComboBox& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
     ComboBox();
     ~ComboBox() override;
     ComboBox& AddItem(std::wstring_view text);
@@ -99,6 +101,7 @@ public:
     ComboBox& Enabled(bool value);
 
 protected:
+    TextRole role_ = TextRole::Body;
     friend class WindowImpl;
     class DropdownPopup;
     class EditField;

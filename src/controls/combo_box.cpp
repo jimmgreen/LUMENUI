@@ -81,6 +81,7 @@ protected:
         return TextBox::OnKey(key);
     }
 private:
+    TextRole ContentRole() const noexcept override { return owner_->Role(); }
     ComboBox* owner_;
 };
 
@@ -200,7 +201,7 @@ protected:
                     painter.FillRoundedRect(slot.Inset(2.0f, 1.0f), 7.0f, theme.fill_selected);
                 }
                 painter.DrawText(owner_->items_[drop.index],
-                                 {slot.x + 10.0f, slot.y, slot.w - 38.0f, slot.h}, TextRole::Body,
+                                 {slot.x + 10.0f, slot.y, slot.w - 38.0f, slot.h}, owner_->Role(),
                                  theme.text);
                 if (picked) {
                     painter.DrawIcon(icon::kCheckMark,
@@ -953,14 +954,15 @@ bool ComboBox::OnAnimate(float dt) {
 void ComboBox::Draw(Painter& painter, const Theme& theme) {
     const float radius = theme.radius_control;
     Color fill = theme.fill_input;
-    Color border{theme.accent.r, theme.accent.g, theme.accent.b,
-                 Lerp(0.20f, 0.50f, glow_t_) * theme.glow_intensity};
-    Color label = Mix(Color{theme.text.r, theme.text.g, theme.text.b, 0.70f}, theme.text, glow_t_);
+    Color border = theme.control_stroke;
+    border.a = Lerp(border.a, theme.text_secondary.a, glow_t_);
+    Color label = theme.text;
     if (!enabled_) { fill = theme.fill_input_disabled; border = theme.control_stroke; label = theme.text_disabled; }
     else if (dropdown_open_ || focused_) { fill = theme.fill_input_focus; border = theme.accent; painter.DrawGlow(absolute_, radius, theme.glow_sm); }
     painter.FillRoundedRect(absolute_, radius, fill);
     painter.DrawInnerLight(absolute_, radius, theme.edge_light, Color{0.0f, 0.0f, 0.0f, 0.35f});
     painter.StrokeRoundedRect(absolute_, radius, border);
+    if (enabled_ && FocusVisible()) PaintFocusRing(painter, theme, absolute_, radius);
     painter.DrawChevron({absolute_.Right() - kChevronArea * 0.5f, absolute_.y + absolute_.h * 0.5f},
                         16.0f, 180.0f * chevron_t_, enabled_ ? theme.text_secondary : theme.text_disabled, 1.6f);
     if (editable_ || (multi_ && ChildCount() > 0)) return;
@@ -968,7 +970,7 @@ void ComboBox::Draw(Painter& painter, const Theme& theme) {
     const std::wstring& text = selected.empty() ? placeholder_ : selected;
     if (!text.empty()) painter.DrawText(text, {absolute_.x + kPadX, absolute_.y,
                                                absolute_.w - kPadX - kChevronArea, absolute_.h},
-                                        TextRole::Body, selected.empty() ? theme.text_secondary : label);
+                                        Role(), selected.empty() ? theme.text_secondary : label);
 }
 
 TextBox& ComboBox::Editor() {

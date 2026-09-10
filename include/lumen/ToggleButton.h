@@ -12,6 +12,9 @@ namespace lumen {
 
 class ToggleButton : public ControlOf<ToggleButton> {
 public:
+    TextRole Role() const noexcept { return role_.value_or(ButtonTextRole(size_, ButtonKind::Standard)); }
+    ToggleButton& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     ToggleButton() = default;
     explicit ToggleButton(std::wstring_view text) : text_(text) {}
 
@@ -35,6 +38,7 @@ public:
     ToggleButton& BindChecked(Property<bool>& p);
 
 protected:
+    std::optional<TextRole> role_;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;

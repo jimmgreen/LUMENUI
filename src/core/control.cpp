@@ -571,9 +571,8 @@ Panel& Panel::Card(CardStyle style, float radius) {
     card_style_ = style;
     card_radius_ = radius;
     use_card_style_ = true;
-    // Lumen 与 Subtle 卡默认追光：分区卡是页面主要承载面，统一光感；
-    // 个别卡片不要光用 Card(...).Spotlight(false) 退掉。
-    if (style == CardStyle::Lumen || style == CardStyle::Subtle) Spotlight(true);
+    // Card selects the default effect; callers can opt in with Spotlight(true).
+    Spotlight(style == CardStyle::Lumen);
     Invalidate();
     return *this;
 }
@@ -601,7 +600,10 @@ Size Panel::MeasureChildAt(size_t index, Size available, const Theme& theme) {
     Size inner = available;
     if (inner.w < 1.0e4f) inner.w = std::max(0.0f, inner.w - m.Horizontal());
     if (inner.h < 1.0e4f) inner.h = std::max(0.0f, inner.h - m.Vertical());
-    Size d = child.Measure(inner, child.EffectiveTheme(theme));
+    // The incoming theme already contains ancestor overrides from the parent's
+    // Measure call. Applying that chain again compounds density at every level.
+    const Theme child_theme = child.style_ ? ApplyThemeOverride(theme, *child.style_) : theme;
+    Size d = child.Measure(inner, child_theme);
     if (child.min_size_.w > 0.0f) d.w = std::max(d.w, child.min_size_.w);
     if (child.min_size_.h > 0.0f) d.h = std::max(d.h, child.min_size_.h);
     if (child.max_size_.w > 0.0f) d.w = std::min(d.w, child.max_size_.w);

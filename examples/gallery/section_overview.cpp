@@ -227,8 +227,8 @@ void BuildOverview(lumen::StackPanel& column, lumen::Window& window) {
              L"Native Windows UI with a monochrome glow. Categories on the left; "
              L"each page shows related controls and their states.");
 
-    auto& hero = Sample(column, L"LUMEN", L"Design with Pure Light.");
-    hero.Add<Chip>(L"LUMEN v1.0 is now available").Glyph(icon::kSparkle);
+    auto& hero = Sample(column, L"LUMEN", L"Design with Pure Light.", Panel::CardStyle::Lumen);
+    hero.Add<Chip>(L"LUMEN v0.3.0 is now available").Glyph(icon::kSparkle);
     hero.Add<Label>(L"A native Windows component library focused on high-contrast, glowing aesthetics.",
                     TextRole::Body)
         .Secondary(true)
@@ -244,6 +244,120 @@ void BuildOverview(lumen::StackPanel& column, lumen::Window& window) {
         jumps.Add<Button>(j.label, ButtonKind::Subtle)
             .SizeClass(ButtonSize::Small)
             .OnClick([id = j.id] { ShowPage(id); });
+    }
+
+    auto& project_host = column.Add<Row>();
+    auto& project_column = project_host.Add<Column>().MaxSize({680.0f, 0.0f});
+    auto& project = Sample(project_column, L"Project settings",
+        L"Try editing a project. Changes in this example are kept for this session only.");
+    project.MaxSize({680.0f, 0.0f}).AlignCross(Cross::Stretch).Spacing(16.0f);
+    auto& settings = project.Add<Form>();
+    settings.Spacing(16.0f);
+    auto& name = settings.Field(L"Project name").Required(true)
+        .Validate(validate::Required()).Add<TextBox>().Text(L"LUMEN Studio");
+    auto& mode = settings.Field(L"Visibility").Add<ComboBox>();
+    mode.AddItems({L"Private", L"Team"}).SelectedIndex(0);
+    auto& updates = project.Add<CheckBox>(L"Notify me about project updates").Checked(true);
+    auto& autosave_row = project.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center);
+    autosave_row.Add<Label>(L"Automatic backups", TextRole::Body).Grow();
+    auto& backups = autosave_row.Add<Switch>().AccessibleName(L"Automatic backups").Checked(true);
+    auto& saved_status = project.Add<Label>(L"Ready to edit", TextRole::Caption);
+    saved_status.Secondary(true).Wrap(true);
+    struct ProjectSnapshot {
+        std::wstring name = L"LUMEN Studio";
+        ptrdiff_t mode = 0;
+        bool updates = true;
+        bool backups = true;
+    };
+    auto snapshot = std::make_shared<ProjectSnapshot>();
+    auto refresh_status = [snapshot, &name, &mode, &updates, &backups, &saved_status] {
+        const bool changed = name.Text() != snapshot->name ||
+            mode.SelectedIndex() != snapshot->mode || updates.Checked() != snapshot->updates ||
+            backups.Checked() != snapshot->backups;
+        saved_status.Text(changed ? L"Unsaved changes." : L"No unsaved changes.");
+    };
+    name.OnTextChanged([refresh_status](std::wstring_view) { refresh_status(); });
+    mode.OnSelectionChanged([refresh_status](ptrdiff_t, ptrdiff_t) { refresh_status(); });
+    updates.OnToggled([refresh_status](bool) { refresh_status(); });
+    backups.OnToggled([refresh_status](bool) { refresh_status(); });
+    auto& project_actions = project.Add<WrapPanel>().Gap(8.0f, 8.0f);
+    project_actions.Add<Button>(L"Save changes", ButtonKind::Primary)
+        .OnClick([snapshot, &settings, &name, &mode, &updates, &backups, &saved_status] {
+            if (!settings.ValidateAll()) {
+                saved_status.Text(L"Enter a project name before saving.");
+                name.Focus();
+                return;
+            }
+            *snapshot = {name.Text(), mode.SelectedIndex(), updates.Checked(), backups.Checked()};
+            saved_status.Text(L"Changes saved for this session.");
+        });
+    project_actions.Add<Button>(L"Reset", ButtonKind::Subtle)
+        .OnClick([snapshot, &settings, &name, &mode, &updates, &backups, &saved_status] {
+            name.Text(snapshot->name);
+            mode.SelectedIndex(snapshot->mode);
+            updates.Checked(snapshot->updates);
+            backups.Checked(snapshot->backups);
+            settings.ValidateAll();
+            saved_status.Text(L"Restored the last saved settings.");
+        });
+
+    auto& typography = Sample(column, L"Typography / Type scale",
+        L"A consistent hierarchy for headings, body text, and supporting information.");
+    struct TypeSample {
+        const wchar_t* name;
+        TextRole role;
+        const wchar_t* text;
+    };
+    for (const auto& sample : {
+        TypeSample{L"Title", TextRole::Title, L"Make room for your next idea"},
+        TypeSample{L"Subtitle", TextRole::Subtitle, L"Everything in one place"},
+        TypeSample{L"BodyStrong", TextRole::BodyStrong, L"A little emphasis goes a long way."},
+        TypeSample{L"Body", TextRole::Body, L"Create, organize, and share your work with your team."},
+        TypeSample{L"CaptionStrong", TextRole::CaptionStrong, L"DETAILS"},
+        TypeSample{L"Caption", TextRole::Caption, L"Last updated a few moments ago."}}) {
+        const auto spec = TextRoleStyle(sample.role);
+        auto& row = typography.Add<Column>().Spacing(6.0f).FillCross();
+        row.Add<Label>(std::wstring(sample.name) + L" / " +
+            std::to_wstring(static_cast<int>(spec.size)) + L" DIP / " +
+            (spec.strong ? L"Semibold" : L"Regular"), TextRole::Caption).Secondary(true);
+        row.Add<Label>(sample.text, sample.role).Wrap(true);
+    }
+    auto& multilingual = Sample(column, L"Typography / Multilingual",
+        L"Compare scripts and numerals at the same text size.");
+    multilingual.Add<Label>(L"The quick brown fox jumps over the lazy dog.", TextRole::Body).Wrap(true);
+    multilingual.Add<Label>(L"以清晰的文字，让每一个想法自然呈现。", TextRole::Body).Wrap(true);
+    multilingual.Add<Label>(L"0123456789  +123.45  50%  09:41", TextRole::Numeric);
+
+    auto& form = Sample(column, L"Typography / Form hierarchy",
+        L"Headings establish structure. Labels, values, and choices share one size.");
+    form.Add<Label>(L"Account settings", TextRole::Subtitle);
+    auto& field = form.Add<Column>().Spacing(6.0f).FillCross();
+    field.Add<Label>(L"Display name", TextRole::Caption);
+    field.Add<TextBox>().Role(TextRole::Caption).Text(L"Alex Morgan").MaxSize({320.0f, 0.0f});
+    field.Add<Label>(L"This is how your name appears to other people.", TextRole::Caption).Secondary(true).Wrap(true);
+    form.Add<Label>(L"Notifications", TextRole::BodyStrong);
+    form.Add<CheckBox>(L"Email me about new activity").Role(TextRole::Caption).Checked(true);
+    auto& frequency = form.Add<WrapPanel>().Gap(16.0f, 8.0f).FillCross();
+    frequency.Add<RadioButton>(L"Daily summary").Role(TextRole::Caption).Group(71).Checked(true);
+    frequency.Add<RadioButton>(L"Weekly summary").Role(TextRole::Caption).Group(71);
+    form.Add<CheckBox>(L"Managed by your organization").Role(TextRole::Caption).Checked(true).Enabled(false);
+    auto& form_actions = form.Add<Row>().Spacing(8.0f);
+    form_actions.Add<Button>(L"Cancel").Role(TextRole::Caption);
+    form_actions.Add<Button>(L"Save changes", ButtonKind::Primary).Role(TextRole::CaptionStrong);
+
+    auto& actions_type = Sample(column, L"Typography / Standard and compact",
+        L"Match text sizes within a control group. Emphasis changes weight, not size.");
+    for (bool compact : {false, true}) {
+        auto& group = actions_type.Add<Column>().Spacing(8.0f).FillCross();
+        const auto role = compact ? TextRole::Caption : TextRole::Body;
+        const auto strong = compact ? TextRole::CaptionStrong : TextRole::BodyStrong;
+        group.Add<Label>(compact ? L"Compact / 12 DIP" : L"Standard / 14 DIP", TextRole::CaptionStrong).Secondary(true);
+        auto& line = group.Add<WrapPanel>().Gap(12.0f, 8.0f).FillCross();
+        line.Add<TextBox>().Role(role).Placeholder(L"Search...").MaxSize({180.0f, 0.0f});
+        line.Add<Button>(L"Search").Role(role);
+        line.Add<Button>(L"Create", ButtonKind::Primary).Role(strong);
+        line.Add<DropDownButton>(L"More actions").Role(role);
+        line.Add<ToggleButton>(L"Favorite").Role(role).Checked(true);
     }
 
     g_save.window = &window;
@@ -371,7 +485,7 @@ void BuildOverview(lumen::StackPanel& column, lumen::Window& window) {
     auto& tokens = Sample(column, L"Glow tokens",
                           L"All light tokens scale with glow_intensity. Spotlight is Lumen cards only.");
     auto& expander = tokens.Add<Expander>(L"glow_sm / md / lg · spotlight · specular · ambient");
-    expander.Add<Label>(L"Sample cards use CardStyle::Lumen. Inner controls do not self-ignite.",
+    expander.Add<Label>(L"Sample cards use CardStyle::Subtle. The brand card opts into CardStyle::Lumen.",
                         TextRole::Caption)
         .Secondary(true)
         .Wrap(true);

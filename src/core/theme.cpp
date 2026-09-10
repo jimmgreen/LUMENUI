@@ -23,7 +23,7 @@ Theme MakeTheme(float glow_intensity) {
 
     // 阶梯：void 黑 -> carbon -> surface -> surface-light，拉大发光体与暗面的对比
     t.bg = Color::Hex(0x000000);
-    t.text = Color::Hex(0xF4F4F5);
+    t.text = Color::Hex(0xF4F4F4);
     t.text_secondary = Rgba(0xFFFFFF, 0.60f);
     t.text_disabled = Rgba(0xFFFFFF, 0.35f);
 
@@ -31,8 +31,8 @@ Theme MakeTheme(float glow_intensity) {
     t.fill_pressed = Rgba(0xFFFFFF, 0.10f);
     t.fill_selected = Rgba(0xFFFFFF, 0.12f);
     t.fill_input = Color::Hex(0x050505);
-    t.fill_input_hover = Color::Hex(0x0A0A0C);
-    t.fill_input_pressed = Color::Hex(0x111010);
+    t.fill_input_hover = Color::Hex(0x0A0A0A);
+    t.fill_input_pressed = Color::Hex(0x111111);
     t.fill_input_focus = Color::Hex(0x050505);
     t.fill_input_disabled = Rgba(0xFFFFFF, 0.03f);
 
@@ -52,18 +52,18 @@ Theme MakeTheme(float glow_intensity) {
     t.grid_line = Rgba(0xFFFFFF, 0.03f);
 
     t.accent = Color::Hex(0xFFFFFF);
-    t.accent_hover = Color::Hex(0xE4E4E7);
-    t.accent_pressed = Color::Hex(0xD4D4D8);
+    t.accent_hover = Color::Hex(0xE4E4E4);
+    t.accent_pressed = Color::Hex(0xD4D4D4);
     t.accent_text = Color::Hex(0x000000);
     t.primary_text = Color::Hex(0x000000);
     t.primary_text_pressed = Rgba(0x000000, 0.63f);
 
-    t.surface_flyout = Color::Hex(0x121215);
-    t.scrollbar_thumb = Color::Hex(0x27272A);
-    t.scrollbar_thumb_hover = Color::Hex(0x52525B);
+    t.surface_flyout = Color::Hex(0x141414);
+    t.scrollbar_thumb = Color::Hex(0x282828);
+    t.scrollbar_thumb_hover = Color::Hex(0x555555);
     t.danger = Color::Hex(0xFAFAFA);
     t.danger_hover = Color::Hex(0xFFFFFF);
-    t.success = Color::Hex(0xA1A1AA);
+    t.success = Color::Hex(0xA3A3A3);
 
     t.duration_fast = 0.12f;
     t.duration_normal = 0.24f;

@@ -157,6 +157,48 @@ void BuildCollections(lumen::StackPanel& column, lumen::Window& window) {
     PageHead(column, L"Collections",
              L"Lots of data: lists, grids, tables, trees, pages, carousels.");
 
+    struct TaskBoard {
+        std::vector<ItemRow> tasks{
+            {L"Review project settings", L"", {L"Review project settings", L"In progress", L"Alex"}},
+            {L"Verify keyboard navigation", L"", {L"Verify keyboard navigation", L"To do", L"Morgan"}},
+            {L"Prepare release notes", L"", {L"Prepare release notes", L"Done", L"Sam"}}};
+        std::shared_ptr<VectorModel<ItemRow>> visible = std::make_shared<VectorModel<ItemRow>>();
+    };
+    auto tasks = std::make_shared<TaskBoard>();
+    tasks->visible->Map([](const ItemRow& item, ItemRow& row) { row = item; });
+    auto& board = Sample(column, L"Project tasks", L"Search tasks, sort by a column, or add a task for this session.");
+    auto& toolbar = board.Add<Row>().Spacing(8.0f).AlignCross(Cross::Center).FillCross();
+    auto& search = toolbar.Add<TextBox>().Placeholder(L"Search tasks").AccessibleName(L"Search tasks").Grow();
+    auto& add_task = toolbar.Add<Button>(L"Add task", ButtonKind::Primary).MinSize({0.0f, 40.0f}).MaxSize({0.0f, 40.0f});
+    auto& tally = board.Add<Label>(L"", TextRole::Caption).Secondary(true);
+    auto& task_table = board.Add<Table>().FillCross().MinSize({0.0f, 180.0f}).MaxSize({0.0f, 180.0f}).RowHeight(36.0f);
+    task_table.Bind(tasks->visible);
+    task_table.AddColumn(L"Task");
+    task_table.AddColumn(L"Status", 140.0f);
+    task_table.AddColumn(L"Owner", 120.0f);
+    auto& empty = board.Add<EmptyState>();
+    empty.Title(L"No matching tasks").Hint(L"Try a different search or clear the filter.");
+    auto refresh_tasks = [tasks, &search, &task_table, &empty, &tally] {
+        std::vector<ItemRow> matches;
+        for (const auto& task : tasks->tasks) {
+            if (search.Text().empty() || task.text.find(search.Text()) != std::wstring::npos)
+                matches.push_back(task);
+        }
+        const bool any = !matches.empty();
+        tally.Text(std::to_wstring(matches.size()) + L" tasks");
+        tasks->visible->Reset(std::move(matches));
+        task_table.Visible(any);
+        empty.Visible(!any);
+    };
+    search.OnTextChanged([refresh_tasks](std::wstring_view) { refresh_tasks(); });
+    empty.Action(L"Clear filter", [&search, refresh_tasks] { search.Text(L""); refresh_tasks(); });
+    add_task.OnClick([tasks, &search, refresh_tasks] {
+        const auto title = L"New task " + std::to_wstring(tasks->tasks.size() + 1);
+        tasks->tasks.push_back({title, L"", {title, L"To do", L"You"}});
+        search.Text(L"");
+        refresh_tasks();
+    });
+    refresh_tasks();
     if (g_mail_flyout.ChildCount() == 0) {
         g_mail_flyout.FlyoutWidth(280.0f).Placement(FlyoutPlacement::Below);
         g_mail_title = &g_mail_flyout.Add<Label>(L"Message", TextRole::BodyStrong);

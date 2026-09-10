@@ -442,7 +442,8 @@ Window::Window(WindowSpec spec) {
     impl_ = std::make_unique<WindowImpl>(this, spec.title, size, spec.frame,
                                          static_cast<HWND>(spec.owner), spec.titleBar,
                                          static_cast<HWND>(spec.matchDpiHwnd),
-                                         static_cast<HWND>(spec.parent), static_cast<HWND>(spec.frameTarget));
+                                         static_cast<HWND>(spec.parent), static_cast<HWND>(spec.frameTarget),
+                                         spec.composeToFrame, spec.cornerRadius);
     Backdrop(spec.backdrop);
     // 无标题栏弹出层保持固定客户区，勿再缩 MinSize。
     if (spec.titleBar)
@@ -726,9 +727,12 @@ void Window::MinimizeToTray(bool on) { impl_->MinimizeToTray(on); }
 void Window::TrayMenu(Menu menu) { impl_->SetTrayMenu(std::move(menu)); }
 
 WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, Frame frame,
-                       HWND owner, bool title_bar, HWND match_dpi_hwnd, HWND parent, HWND frame_target)
+                       HWND owner, bool title_bar, HWND match_dpi_hwnd, HWND parent, HWND frame_target,
+                       bool compose_to_frame, float corner_radius)
     : api_(api), parent_(parent), frame_target_(parent ? frame_target : nullptr), frame_(frame), title_(title), glow_intensity_(0.5f) {
     ui_thread_id_ = GetCurrentThreadId();
+    corner_radius_ = frame_ == Frame::Client && std::isfinite(corner_radius)
+        ? std::max(0.0f, corner_radius) : 0.0f;
     QueryPerformanceFrequency(&qpc_freq_);
     root_ = std::make_unique<StackPanel>();
     root_->window_ = api_;
@@ -795,7 +799,9 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
     if (title_bar_) BindWindowRecursive(title_bar_.get(), api_);
     UpdateClientSize();
     RefreshTheme();
-    renderer_.Init(hwnd_, client_w_, client_h_);
+    renderer_.Init(hwnd_, client_w_, client_h_,
+                   compose_to_frame && parent_ == frame_target_ ? frame_target_ : nullptr);
+    renderer_.SetCornerRadius(corner_radius_ * scale_);
     ApplyClientChrome();
     RegisterOleDrop();
 }
@@ -855,6 +861,7 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         if (parent_) return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
         break;
     case WM_SHOWWINDOW:
+        renderer_.SetCompositionVisible(wparam != 0);
         if (!wparam) { renderer_.StopFrameTimer(); animating_ = false; }
         if (shown_state_ != (wparam != 0)) {
             shown_state_ = wparam != 0;
@@ -2234,6 +2241,8 @@ void WindowImpl::Paint() {
     dirty_full_ = false;
     dirty_count_ = 0;
 
+    // DPI 或最大化状态变化后，合成裁剪与页面使用同一逻辑尺寸。
+    renderer_.SetCornerRadius(IsZoomed(FrameHwnd()) ? 0.0f : corner_radius_ * scale_);
     ID2D1DeviceContext2* dc = renderer_.BeginDraw();
     if (!dc) {
         painting_ = false;

@@ -1,7 +1,7 @@
 # Rename leftover dual SetX to X after 10.2.
 from pathlib import Path
 
-root = Path(r".")
+root = Path(__file__).resolve().parents[1]
 skip_dirs = {"build", ".git", "_deps"}
 names = [
     "SetSeriesVisible",

@@ -15,8 +15,11 @@ namespace lumen {
 
 class NumberBox : public TextBox {
 public:
-    NumberBox() = default;
-    explicit NumberBox(double value) { Value(value); }
+    NumberBox() { role_ = TextRole::Numeric; }
+    explicit NumberBox(double value) : NumberBox() { Value(value); }
+
+    using TextBox::Role;
+    NumberBox& Role(TextRole role) { TextBox::Role(role); return *this; }
 
     NumberBox& Range(double min_value, double max_value);
     double Min() const noexcept { return min_; }
@@ -91,7 +94,7 @@ protected:
     bool AutomationSetRange(double value) override;
     bool AutomationSetValue(std::wstring_view value) override;
     bool AutomationIsReadOnly() const noexcept override { return read_only_; }
-    TextRole ContentRole() const noexcept override { return TextRole::Numeric; }
+    TextRole ContentRole() const noexcept override { return role_; }
     bool OnChar(wchar_t ch) override;
     bool ImeInline() const noexcept override { return false; }
     bool OnKey(uint32_t vk) override;

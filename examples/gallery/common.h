@@ -58,7 +58,8 @@ void BindShell(lumen::NavigationView& nav);
 lumen::StackPanel& Lumen(lumen::StackPanel& panel, float radius = kCardRadius);
 void PageHead(lumen::StackPanel& column, std::wstring_view title, std::wstring_view subtitle);
 lumen::StackPanel& Sample(lumen::StackPanel& column, std::wstring_view title,
-                          std::wstring_view hint = {});
+                          std::wstring_view hint = {},
+                          lumen::Panel::CardStyle style = lumen::Panel::CardStyle::Subtle);
 // Sample 卡交叉轴按内容宽。铺满卡宽：Wide(card).Add<ListView>().Grow();
 inline lumen::StackPanel& Wide(lumen::StackPanel& host) { return host.Add<lumen::Row>(); }
 void ShowDialog(lumen::Window& window);
