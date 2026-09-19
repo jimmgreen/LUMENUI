@@ -101,7 +101,7 @@ Size Segmented::Measure(Size, const Theme& theme) {
 }
 
 void Segmented::Draw(Painter& painter, const Theme& theme) {
-    painter.FillRoundedRect(absolute_, 12.0f, theme.fill_hover);
+    painter.FillRoundedRect(absolute_, 12.0f, enabled_ ? theme.fill_hover : theme.fill_input_disabled);
     painter.StrokeRoundedRect(absolute_, 12.0f, theme.stroke_card);
 
     if (!thumb_ready_) SnapThumb();
@@ -109,7 +109,7 @@ void Segmented::Draw(Painter& painter, const Theme& theme) {
     const float item_h = absolute_.h - kPad * 2.0f;
     const float item_y = absolute_.y + kPad;
 
-    if (hover_item_ >= 0 && hover_item_ != static_cast<int>(selected_)) {
+    if (enabled_ && hover_item_ >= 0 && hover_item_ != static_cast<int>(selected_)) {
         float hx = 0.0f, hw = 0.0f;
         ItemSlot(static_cast<size_t>(hover_item_), hx, hw, theme);
         painter.FillRoundedRect({absolute_.x + hx, item_y, hw, item_h}, kItemRadius,
@@ -118,8 +118,8 @@ void Segmented::Draw(Painter& painter, const Theme& theme) {
 
     if (thumb_w_ > 0.5f) {
         const Rect thumb{absolute_.x + thumb_x_, item_y, thumb_w_, item_h};
-        painter.DrawGlow(thumb, kItemRadius, theme.glow_sm);
-        painter.FillRoundedRect(thumb, kItemRadius, theme.accent);
+        if (enabled_) painter.DrawGlow(thumb, kItemRadius, theme.glow_sm);
+        painter.FillRoundedRect(thumb, kItemRadius, enabled_ ? theme.accent : theme.fill_selected);
     }
 
     float x = absolute_.x + kPad;
@@ -127,13 +127,14 @@ void Segmented::Draw(Painter& painter, const Theme& theme) {
         const float w = ItemWidth(i, theme);
         const Rect slot{x, item_y, w, item_h};
         const bool selected = static_cast<ptrdiff_t>(i) == selected_;
-        const Color color = selected ? theme.accent_text
-                                     : ((hovered_ && hover_item_ == static_cast<int>(i))
-                                            ? theme.text
-                                            : theme.text_secondary);
+        const Color color = !enabled_ ? theme.text_disabled
+                            : selected ? theme.accent_text
+                            : (hovered_ && hover_item_ == static_cast<int>(i)) ? theme.text
+                                                                            : theme.text_secondary;
         painter.DrawText(items_[i], slot, role_, color, Align::Center);
         x += w;
     }
+    if (enabled_ && FocusVisible()) PaintFocusRing(painter, theme, absolute_, 12.0f);
 }
 
 bool Segmented::OnKey(uint32_t vk) {

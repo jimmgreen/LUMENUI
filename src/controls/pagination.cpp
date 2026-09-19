@@ -74,6 +74,7 @@ void Pagination::Arrange(const Rect& absolute) {
 }
 
 bool Pagination::OnKey(uint32_t vk) {
+    if (!enabled_) return false;
     switch (vk) {
     case VK_LEFT:
         Navigate(current_ - 1);
@@ -96,7 +97,7 @@ void Pagination::OnMouseDown(Point local, uint32_t buttons) {
     if (!(buttons & 0x0001)) return;
     Focus();
     for (const Hit& hit : buttons_) {
-        if (!hit.rect.Contains(local)) continue;
+        if (!hit.rect.Contains(local) || !CanNavigate(hit)) continue;
         if (hit.page == -1) Navigate(current_ - 1);
         else if (hit.page == -2) Navigate(current_ + 1);
         else if (hit.page > 0) Navigate(static_cast<size_t>(hit.page));
@@ -108,7 +109,7 @@ void Pagination::OnMouseMove(Point local, uint32_t buttons) {
     (void)buttons;
     int hover = -1;
     for (size_t i = 0; i < buttons_.size(); ++i) {
-        if (buttons_[i].rect.Contains(local)) {
+        if (buttons_[i].rect.Contains(local) && CanNavigate(buttons_[i])) {
             hover = static_cast<int>(i);
             break;
         }
@@ -127,9 +128,18 @@ void Pagination::OnMouseLeave() {
     }
 }
 
+// One availability rule drives hit feedback, cursor and activation.
+bool Pagination::CanNavigate(const Hit& hit) const noexcept {
+    if (!enabled_) return false;
+    if (hit.page == -1) return current_ > 1;
+    if (hit.page == -2) return current_ < count_;
+    return hit.page > 0 && static_cast<size_t>(hit.page) <= count_ &&
+           static_cast<size_t>(hit.page) != current_;
+}
+
 CursorShape Pagination::CursorAt(Point local) const {
     for (const Hit& hit : buttons_) {
-        if (hit.rect.Contains(local)) return CursorShape::Hand;
+        if (hit.rect.Contains(local) && CanNavigate(hit)) return CursorShape::Hand;
     }
     return CursorShape::Arrow;
 }
@@ -139,28 +149,33 @@ void Pagination::Draw(Painter& painter, const Theme& theme) {
     for (size_t i = 0; i < buttons_.size(); ++i) {
         const Hit& hit = buttons_[i];
         const Rect r{absolute_.x + hit.rect.x, absolute_.y + hit.rect.y, hit.rect.w, hit.rect.h};
-        const bool hot = static_cast<int>(i) == hover_ && enabled_;
+        const bool actionable = CanNavigate(hit);
+        const bool hot = static_cast<int>(i) == hover_ && actionable;
         if (hit.page == -3) {
             painter.DrawText(hit.label, r, TextRole::Body, theme.text_disabled, Align::Center);
             continue;
         }
         if (hit.page >= 1 && static_cast<size_t>(hit.page) == current_) {
-            painter.FillRoundedRect(r, theme.radius_control * 0.6f, theme.fill_selected);
+            painter.FillRoundedRect(r, theme.radius_control * 0.6f,
+                                    enabled_ ? theme.fill_selected : theme.fill_input_disabled);
         } else if (hot) {
             painter.FillRoundedRect(r, theme.radius_control * 0.6f, theme.fill_hover);
         }
         if (hit.page == -1) {
             painter.DrawChevron({r.x + r.w * 0.5f, r.y + r.h * 0.5f}, 10.0f, 90.0f,
-                                enabled_ ? theme.text_secondary : theme.text_disabled, 1.7f);
+                                actionable ? theme.text_secondary : theme.text_disabled, 1.7f);
         } else if (hit.page == -2) {
             painter.DrawChevron({r.x + r.w * 0.5f, r.y + r.h * 0.5f}, 10.0f, -90.0f,
-                                enabled_ ? theme.text_secondary : theme.text_disabled, 1.7f);
+                                actionable ? theme.text_secondary : theme.text_disabled, 1.7f);
         } else {
             const bool current = static_cast<size_t>(hit.page) == current_;
             painter.DrawText(hit.label, r, TextRole::Body,
-                             current || hot ? theme.text : theme.text_secondary, Align::Center);
+                             !enabled_ ? theme.text_disabled
+                                       : (current || hot ? theme.text : theme.text_secondary), Align::Center);
         }
     }
+    if (enabled_ && Focusable() && FocusVisible())
+        PaintFocusRing(painter, theme, absolute_, theme.radius_control * 0.6f);
 }
 
 } // namespace lumen

@@ -43,6 +43,90 @@ struct BenchTable : Table { using Table::Measure; using Table::Arrange; using Ta
 
 struct BenchLog : LogView { using LogView::Arrange; using LogView::Prepare; using LogView::Draw; };
 
+bool TriangleBench(OffscreenRenderer& renderer, Painter& painter) {
+    constexpr int kFrames = 120, kTriangles = 256;
+    const Color ink{1.0f, 1.0f, 1.0f, 0.25f};
+    std::vector<double> draw_ms;
+    draw_ms.reserve(kFrames);
+    size_t allocations = 0;
+    for (int frame = -10; frame < kFrames; ++frame) {
+        painter.FillRect({0, 0, 1280, 800}, {0, 0, 0, 1});
+        allocation_probe::count = allocation_probe::bytes = 0;
+        allocation_probe::enabled = frame >= 0;
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < kTriangles; ++i) {
+            const float x = 8.0f + static_cast<float>(i % 32) * 38.0f;
+            const float y = 8.0f + static_cast<float>(i / 32) * 90.0f;
+            const float offset = static_cast<float>((frame + 10) % 7) * 0.25f;
+            painter.FillTriangle({x, y + 60}, {x + 18, y + offset}, {x + 36, y + 60}, ink);
+        }
+        const auto end = std::chrono::steady_clock::now();
+        allocation_probe::enabled = false;
+        if (frame >= 0) {
+            allocations += allocation_probe::count;
+            draw_ms.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+        }
+        if (!renderer.EndDraw()) return false;
+        painter.BeginFrame(renderer.BeginDraw(), &UiText(), 1.0f);
+    }
+    std::sort(draw_ms.begin(), draw_ms.end());
+    double total = 0.0;
+    for (double ms : draw_ms) total += ms;
+    std::printf("triangles changing vertices: frames=%d triangles/frame=%d CPU Draw avg=%.3f p50=%.3f p95=%.3f ms C++ allocations=%zu\n",
+                kFrames, kTriangles, total / kFrames, draw_ms[kFrames / 2],
+                draw_ms[static_cast<size_t>(0.95 * (kFrames - 1))], allocations);
+    const bool pass = allocations == 0;
+    std::printf("[%s] triangle warm Draw C++ allocation boundary (excludes COM/driver)\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
+bool PolylineBench(OffscreenRenderer& renderer, Painter& painter) {
+    constexpr int kFrames = 120, kLines = 16, kMaxPoints = 2049;
+    Point points[kMaxPoints];
+    bool pass = true;
+    for (int count : {2, 249, kMaxPoints}) {
+        for (int i = 0; i < count; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(count - 1);
+            points[i] = {16.0f + t * 1200.0f, 100.0f + 40.0f * std::sin(t * 24.0f)};
+        }
+        std::vector<double> draw_ms, frame_ms;
+        draw_ms.reserve(kFrames);
+        frame_ms.reserve(kFrames);
+        size_t allocations = 0;
+        for (int frame = -10; frame < kFrames; ++frame) {
+            painter.FillRect({0, 0, 1280, 800}, {0, 0, 0, 1});
+            allocation_probe::count = allocation_probe::bytes = 0;
+            allocation_probe::enabled = frame >= 0;
+            const auto start = std::chrono::steady_clock::now();
+            for (int line = 0; line < kLines; ++line) {
+                points[count / 2].y = 100.0f + static_cast<float>((frame + 10 + line) % 13);
+                painter.StrokeOpenPolyline(points, count, {1, 1, 1, 0.5f}, 1.4f, (line % 2) != 0);
+            }
+            const auto drawn = std::chrono::steady_clock::now();
+            allocation_probe::enabled = false;
+            const bool ok = renderer.EndDraw();
+            const auto end = std::chrono::steady_clock::now();
+            if (!ok) return false;
+            if (frame >= 0) {
+                allocations += allocation_probe::count;
+                draw_ms.push_back(std::chrono::duration<double, std::milli>(drawn - start).count());
+                frame_ms.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+            }
+            painter.BeginFrame(renderer.BeginDraw(), &UiText(), 1.0f);
+        }
+        double draw_total = 0.0, frame_total = 0.0;
+        for (double ms : draw_ms) draw_total += ms;
+        for (double ms : frame_ms) frame_total += ms;
+        std::sort(draw_ms.begin(), draw_ms.end());
+        std::printf("polyline points=%d lines/frame=%d frames=%d CPU Draw avg=%.6f p50=%.6f p95=%.6f submission_avg=%.6f ms C++ allocations=%zu\n",
+                    count, kLines, kFrames, draw_total / kFrames, draw_ms[kFrames / 2],
+                    draw_ms[static_cast<size_t>(0.95 * (kFrames - 1))], frame_total / kFrames, allocations);
+        pass = allocations == 0 && pass;
+    }
+    std::printf("[%s] polyline warm Draw C++ allocation boundary (excludes COM/driver)\n", pass ? "PASS" : "FAIL");
+    return pass;
+}
+
 bool LogAllocationBench(Painter& painter, const Theme& theme) {
     BenchLog log;
     size_t reads = 0;
@@ -230,6 +314,8 @@ int main() {
         bridge.Shutdown();
     } else { std::printf("[FAIL] LumaText benchmark initialization\n"); table_pass = false; }
 #endif
+    const bool triangle_pass = TriangleBench(renderer, painter);
+    const bool polyline_pass = PolylineBench(renderer, painter);
     renderer.Shutdown();
     const double avg = Mean(frame_ms);
     double worst = 0.0;
@@ -249,7 +335,7 @@ int main() {
     std::printf("场景：1280x800，8 按钮 + 100,000 行虚拟列表 + 聚光卡 + Area/Heatmap，全帧重绘 %d 帧\n",
                 kFrames);
     std::printf("平均 %.3f ms/帧，最差 %.3f ms/帧\n", avg, worst);
-    const bool pass = avg < 8.0 && table_pass;
+    const bool pass = avg < 8.0 && table_pass && triangle_pass && polyline_pass;
     std::printf("%s perf_frame_budget (< 8 ms)\n", pass ? "[PASS]" : "[FAIL]");
     CoUninitialize();
     return pass ? 0 : 1;

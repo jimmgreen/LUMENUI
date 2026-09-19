@@ -32,9 +32,8 @@ void RadioButton::Draw(Painter& painter, const Theme& theme) {
 
     if (checked_) {
         const Color fill = enabled_ ? theme.bg : theme.fill_input_disabled;
-        const Color border = enabled_ ? theme.accent
-                                       : Color{theme.accent.r, theme.accent.g, theme.accent.b,
-                                               0.16f * theme.glow_intensity};
+        Color border = enabled_ ? theme.accent : theme.control_stroke;
+        if (!enabled_) border.a *= 0.4f;
         if (enabled_) painter.DrawGlow(circle, outer_radius, theme.glow_sm);
         painter.FillRoundedRect(circle, outer_radius, fill);
         painter.StrokeRoundedRect(circle, outer_radius, border, 1.0f);
@@ -43,9 +42,9 @@ void RadioButton::Draw(Painter& painter, const Theme& theme) {
                          circle.y + (kCircleSize - dot) * 0.5f, dot, dot};
         painter.FillRoundedRect(inner, dot * 0.5f, enabled_ ? theme.accent : theme.text_disabled);
     } else {
-        const Color border =
-            Color{theme.accent.r, theme.accent.g, theme.accent.b,
-                  (enabled_ ? (hovered_ ? 0.60f : 0.30f) : 0.16f) * theme.glow_intensity};
+        // Basic chrome must survive glow_intensity=0; only decoration uses glow tokens.
+        Color border = enabled_ && hovered_ ? theme.text_secondary : theme.control_stroke;
+        if (!enabled_) border.a *= 0.4f;
         painter.FillRoundedRect(circle, outer_radius, theme.bg);
         painter.StrokeRoundedRect(circle, outer_radius, border, 1.0f);
         if (enabled_ && hovered_) {

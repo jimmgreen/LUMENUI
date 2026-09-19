@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(lumen VERSION 0.4.0 LANGUAGES CXX RC)
+project(lumen VERSION 0.4.1 LANGUAGES CXX RC)
 
 # 修正中文 VS18 / CMake 的 UTF-8 依赖前缀误解码，防止头文件漏编。
 if(MSVC AND CMAKE_CL_SHOWINCLUDES_PREFIX MATCHES "^娉ㄦ剰:")

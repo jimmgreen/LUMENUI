@@ -87,7 +87,8 @@ public:
     void StrokeOpenPolyline(const Point* pts, int n, Color color, float width = 1.4f,
                             bool dashed = false);
     void DrawDashedLine(Point a, Point b, Color color, float width = 1.0f);
-    // 三角形填充 / 三点折线描边。几何缓存在 Painter 上，顶点未变不重建（绘制路径零堆）。
+    // Triangle fill reuses a unit path via an affine transform, even when vertices change.
+    // Three-point stroke caches its vertices without scaling the stroke width.
     void FillTriangle(Point a, Point b, Point c, Color color);
     void StrokePolyline(Point a, Point b, Point c, Color color, float width = 1.0f);
     // 圆弧：角度制，0° 指向右侧，正值顺时针。真 D2D 弧，圆头只在两端。

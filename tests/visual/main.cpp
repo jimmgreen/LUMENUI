@@ -6,6 +6,7 @@
 #include "core/text_service.h"
 #include "core/renderer.h"
 #include "core/menu_window.h"
+#include "control_usability.h"
 #include <objbase.h>
 #include <algorithm>
 #include <array>
@@ -5821,6 +5822,181 @@ struct PolishProbe : T {
     void KeyboardFocus(bool value) { this->focused_ = value; }
 };
 
+bool ReferenceTriangle(ID2D1DeviceContext2* dc, Point a, Point b, Point c, Color ink) {
+    ComPtr<ID2D1Factory> factory;
+    dc->GetFactory(&factory);
+    ComPtr<ID2D1PathGeometry> path;
+    ComPtr<ID2D1GeometrySink> sink;
+    ComPtr<ID2D1SolidColorBrush> brush;
+    if (!factory || FAILED(factory->CreatePathGeometry(&path)) ||
+        FAILED(path->Open(&sink)) ||
+        FAILED(dc->CreateSolidColorBrush({ink.r, ink.g, ink.b, ink.a}, &brush))) return false;
+    sink->BeginFigure({a.x, a.y}, D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddLine({b.x, b.y});
+    sink->AddLine({c.x, c.y});
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    if (FAILED(sink->Close())) return false;
+    dc->FillGeometry(path.get(), brush.get());
+    return true;
+}
+
+void TestTriangleTransforms() {
+    OffscreenRenderer target;
+    if (!target.Init(384, 320)) { Check(false, "triangle renderer init"); return; }
+    Painter painter;
+    const Point triangles[][3] = {
+        {{12.25f, 16.5f}, {60.75f, 20.25f}, {34.5f, 58.75f}},
+        {{70, 12}, {72, 65}, {112, 35}}, // reversed winding
+        {{18, 72}, {96, 72.125f}, {54, 72.25f}}, // thin
+        {{18, 86}, {45, 86}, {72, 86}}, // collinear
+        {{24, 100}, {24, 100}, {24, 100}}, // coincident
+        {{32, 28}, {90, 50}, {34, 62}}, // translucent overlap
+    };
+    bool restored = true, reference_ok = true, readback_ok = true;
+    int max_delta = 0;
+    for (float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+        for (int mode = 0; mode < 5; ++mode) {
+            std::vector<uint8_t> pixels[2];
+            for (int pass = 0; pass < 2; ++pass) {
+                auto* dc = target.BeginDraw();
+                painter.BeginFrame(dc, &UiText(), scale);
+                dc->Clear({0, 0, 0, 0});
+                // Keep the clip in caller space while triangle transforms change.
+                painter.PushClip({8, 8, 105, 103});
+                if (mode == 1) painter.PushTranslate(4.25f, 6.5f);
+                if (mode == 2) painter.PushRotate({64, 56}, 17.0f);
+                if (mode == 3) painter.PushScale({64, 56}, -0.85f, 0.65f);
+                if (mode == 4) {
+                    painter.PrepareRoundedClip({10, 10, 100, 98}, 12);
+                    painter.PushRoundedClip({10, 10, 100, 98}, 12);
+                    painter.PushOpacity(0.65f);
+                }
+                D2D1_MATRIX_3X2_F before;
+                dc->GetTransform(&before);
+                for (const auto& points : triangles) {
+                    const Color ink{1, 1, 1, mode % 2 == 0 ? 0.375f : 1.0f};
+                    if (pass == 0) {
+                        reference_ok = ReferenceTriangle(dc, points[0], points[1], points[2], ink) && reference_ok;
+                    } else {
+                        painter.FillTriangle(points[0], points[1], points[2], ink);
+                        // Transparent early-return must leave state alone too.
+                        painter.FillTriangle(points[2], points[1], points[0], {1, 1, 1, 0});
+                    }
+                    D2D1_MATRIX_3X2_F after;
+                    dc->GetTransform(&after);
+                    restored = restored && std::memcmp(&before, &after, sizeof(before)) == 0;
+                }
+                painter.FillRect({92, 90, 6, 6}, {1, 1, 1, 1});
+                if (mode >= 1 && mode <= 3) painter.PopTransform();
+                if (mode == 4) { painter.PopOpacity(); painter.PopRoundedClip(); }
+                painter.PopClip();
+                painter.EndFrame();
+                readback_ok = target.EndDraw() && readback_ok;
+                readback_ok = target.ReadBack(pixels[pass]) && readback_ok;
+            }
+            if (pixels[0].empty() || pixels[0].size() != pixels[1].size()) {
+                readback_ok = false;
+                continue;
+            }
+            for (size_t i = 0; i < pixels[0].size(); ++i) {
+                max_delta = std::max(max_delta, std::abs(static_cast<int>(pixels[0][i]) - pixels[1][i]));
+            }
+        }
+    }
+    Check(reference_ok && readback_ok, "triangle reference render/readback");
+    Check(restored, "triangle fill restores caller transform including degenerate/transparent cases");
+    std::printf("triangle reference max channel delta=%d/255\n", max_delta);
+    Check(max_delta <= 2, "triangle pixels match reference at 100/125/150/200 percent, clips and opacity");
+}
+
+void TestPolylineBatches() {
+    OffscreenRenderer target;
+    if (!target.Init(384, 320)) { Check(false, "polyline renderer init"); return; }
+    Painter painter;
+    std::array<Point, 2049> points;
+    bool ok = true, restored = true;
+    int max_delta = 0;
+    for (int count : {2, 3, 256, 257, 258, 513, 2049}) {
+        for (int i = 0; i < count; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(count - 1);
+            points[i] = {12.25f + 145.0f * t, 60.5f + 24.0f * std::sin(t * 18.0f)};
+        }
+        if (count > 257) {
+            points[255].y = 100.0f;
+            points[256] = points[255];
+            points[257].y = 30.0f;
+        }
+        if (count == 513) points[count - 1] = points[0];
+        for (float scale : {1.0f, 1.25f, 1.5f, 2.0f}) {
+            for (bool dashed : {false, true}) {
+                std::vector<uint8_t> pixels[2];
+                for (int pass = 0; pass < 2; ++pass) {
+                    auto* dc = target.BeginDraw();
+                    painter.BeginFrame(dc, &UiText(), scale);
+                    dc->Clear({0, 0, 0, 0});
+                    painter.PushClip({10, 8, 150, 115});
+                    if (dashed) {
+                        painter.PushRotate({80, 60}, 9.0f);
+                        painter.PushScale({80, 60}, 0.85f, 1.15f);
+                    }
+                    D2D1_MATRIX_3X2_F before;
+                    dc->GetTransform(&before);
+                    const Color ink{1, 1, 1, 0.5f};
+                    const float width = dashed ? 3.25f : 1.4f;
+                    if (pass == 0) {
+                        ComPtr<ID2D1Factory> factory;
+                        ComPtr<ID2D1PathGeometry> path;
+                        ComPtr<ID2D1GeometrySink> sink;
+                        ComPtr<ID2D1SolidColorBrush> brush;
+                        ComPtr<ID2D1StrokeStyle> style;
+                        dc->GetFactory(&factory);
+                        D2D1_STROKE_STYLE_PROPERTIES props{};
+                        props.startCap = props.endCap = props.dashCap = D2D1_CAP_STYLE_ROUND;
+                        props.lineJoin = D2D1_LINE_JOIN_ROUND;
+                        props.miterLimit = 10.0f;
+                        props.dashStyle = dashed ? D2D1_DASH_STYLE_CUSTOM : D2D1_DASH_STYLE_SOLID;
+                        const FLOAT dashes[] = {4.0f, 3.0f};
+                        const bool ready = factory && SUCCEEDED(factory->CreatePathGeometry(&path)) &&
+                            SUCCEEDED(path->Open(&sink)) &&
+                            SUCCEEDED(dc->CreateSolidColorBrush({1, 1, 1, 0.5f}, &brush)) &&
+                            SUCCEEDED(factory->CreateStrokeStyle(props, dashed ? dashes : nullptr,
+                                                                  dashed ? 2u : 0u, &style));
+                        ok = ready && ok;
+                        if (ready) {
+                            sink->BeginFigure({points[0].x, points[0].y}, D2D1_FIGURE_BEGIN_HOLLOW);
+                            for (int i = 1; i < count; ++i) sink->AddLine({points[i].x, points[i].y});
+                            sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                            ok = SUCCEEDED(sink->Close()) && ok;
+                            dc->DrawGeometry(path.get(), brush.get(), width, style.get());
+                        }
+                    } else {
+                        painter.StrokeOpenPolyline(points.data(), count, ink, width, dashed);
+                        painter.StrokeOpenPolyline(nullptr, count, ink, width, dashed);
+                        for (int invalid : {-1, 0, 1})
+                            painter.StrokeOpenPolyline(points.data(), invalid, ink, width, dashed);
+                        painter.StrokeOpenPolyline(points.data(), count, ink, 0, dashed);
+                        painter.StrokeOpenPolyline(points.data(), count, {1, 1, 1, 0}, width, dashed);
+                    }
+                    D2D1_MATRIX_3X2_F after;
+                    dc->GetTransform(&after);
+                    restored = std::memcmp(&before, &after, sizeof(before)) == 0 && restored;
+                    if (dashed) { painter.PopTransform(); painter.PopTransform(); }
+                    painter.PopClip();
+                    painter.EndFrame();
+                    ok = target.EndDraw() && ok;
+                    ok = target.ReadBack(pixels[pass]) && ok;
+                }
+                if (pixels[0].empty() || pixels[0].size() != pixels[1].size()) { ok = false; continue; }
+                for (size_t i = 0; i < pixels[0].size(); ++i)
+                    max_delta = std::max(max_delta, std::abs(static_cast<int>(pixels[0][i]) - pixels[1][i]));
+            }
+        }
+    }
+    Check(ok && restored, "polyline reference render/readback and caller state");
+    std::printf("polyline batch reference max channel delta=%d/255\n", max_delta);
+    Check(max_delta == 0, "polyline batches preserve joins/dash phase at boundaries and 100/125/150/200 percent");
+}
+
 void TestQuietStates() {
     Panel card;
     card.Card(Panel::CardStyle::Subtle, 16.0f);
@@ -5973,7 +6149,10 @@ int main() {
     TestReviewFixes();
     TestLayout();
     TestTypography();
+    TestTriangleTransforms();
+    TestPolylineBatches();
     TestQuietStates();
+    control_usability::Run(Check);
     TestInteraction();
     TestImageViewRendering();
     TestExtras();

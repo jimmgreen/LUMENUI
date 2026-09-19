@@ -767,8 +767,21 @@ void Painter::StrokeOpenPolyline(const Point* pts, int n, Color color, float wid
         return;
     }
     sink->BeginFigure(D2D1::Point2F(pts[0].x, pts[0].y), D2D1_FIGURE_BEGIN_HOLLOW);
-    for (int i = 1; i < n; ++i) {
-        sink->AddLine(D2D1::Point2F(pts[i].x, pts[i].y));
+    if (n == 2) {
+        sink->AddLine(D2D1::Point2F(pts[1].x, pts[1].y));
+    } else {
+        // Keep one figure across batches so joins and dash phase remain continuous.
+        // Convert explicitly: Point and D2D1_POINT_2F are not alias-compatible types.
+        constexpr int kBatch = 256;
+        D2D1_POINT_2F batch[kBatch];
+        for (int first = 1; first < n;) {
+            const int count = std::min(kBatch, n - first);
+            for (int i = 0; i < count; ++i) {
+                batch[i] = D2D1::Point2F(pts[first + i].x, pts[first + i].y);
+            }
+            sink->AddLines(batch, static_cast<UINT32>(count));
+            first += count;
+        }
     }
     sink->EndFigure(D2D1_FIGURE_END_OPEN);
     const HRESULT hr = sink->Close();
@@ -845,9 +858,17 @@ ID2D1PathGeometry* Painter::EnsureIconGeometry(const char* d) {
 
 void Painter::FillTriangle(Point a, Point b, Point c, Color color) {
     if (!dc_ || color.a <= 0.0f) return;
-    ID2D1PathGeometry* geometry = EnsurePath(fill_triangle_, a, b, c, true);
+    // Map one immutable unit triangle instead of replacing a path for every
+    // area-chart segment. Compose with (and restore) the caller's DPI/local transform.
+    ID2D1PathGeometry* geometry = EnsurePath(fill_triangle_, {0, 0}, {1, 0}, {0, 1}, true);
     if (!geometry) return;
-    dc_->FillGeometry(geometry, Brush(color));
+    ID2D1SolidColorBrush* brush = Brush(color);
+    D2D1_MATRIX_3X2_F saved;
+    dc_->GetTransform(&saved);
+    const D2D1::Matrix3x2F triangle(b.x - a.x, b.y - a.y, c.x - a.x, c.y - a.y, a.x, a.y);
+    dc_->SetTransform(triangle * saved);
+    dc_->FillGeometry(geometry, brush);
+    dc_->SetTransform(saved);
 }
 
 void Painter::StrokePolyline(Point a, Point b, Point c, Color color, float width) {

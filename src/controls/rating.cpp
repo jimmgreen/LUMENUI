@@ -106,7 +106,8 @@ void Rating::Draw(Painter& painter, const Theme& theme) {
         const double fill = Clamp(shown - static_cast<double>(i), 0.0, 1.0);
         if (fill <= 0.0) continue;
         painter.PushClip({rect.x, rect.y, rect.w * static_cast<float>(fill), rect.h});
-        painter.DrawIcon(icon::kFavoriteFill, rect, star_size_ - 2.0f, theme.text);
+        painter.DrawIcon(icon::kFavoriteFill, rect, star_size_ - 2.0f,
+                         enabled_ ? theme.text : theme.text_disabled);
         painter.PopClip();
     }
     if (focused_ && enabled_ && !read_only_) {

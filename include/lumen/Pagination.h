@@ -45,6 +45,7 @@ private:
         int page = 0;            // 1-based；-1 = 上一页箭头，-2 = 下一页箭头，-3 = 省略号
         std::wstring label;      // 页码文本（输入路径预构建，绘制零分配）
     };
+    bool CanNavigate(const Hit& hit) const noexcept;
     void RebuildButtons(float width);
     void Navigate(size_t page);
 

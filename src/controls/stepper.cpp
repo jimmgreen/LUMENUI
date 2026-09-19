@@ -164,26 +164,29 @@ void Stepper::Draw(Painter& painter, const Theme& theme) {
         const Rect circle{cx - kCircle * 0.5f, cy - kCircle * 0.5f, kCircle, kCircle};
         if (done) {
             painter.FillRoundedRect(circle, kCircle * 0.5f,
-                                    hot ? theme.text : theme.text_secondary);
+                                    !enabled_ ? theme.text_disabled
+                                              : (hot ? theme.text : theme.text_secondary));
             painter.DrawIcon(icon::kCheckMark, circle, 10.0f, theme.bg);
         } else if (current) {
-            Color ring = theme.text;
+            Color ring = enabled_ ? theme.text : theme.text_disabled;
             ring.a *= std::min(pop, 1.0f);
             painter.StrokeRoundedRect(circle, kCircle * 0.5f, ring);
             const float dot_r = 3.0f * pop;   // OutBack 轻过冲：先胀后定
             painter.FillRoundedRect({cx - dot_r, cy - dot_r, dot_r * 2.0f, dot_r * 2.0f},
-                                    dot_r, theme.text);
+                                    dot_r, enabled_ ? theme.text : theme.text_disabled);
         } else {
             painter.StrokeRoundedRect(circle, kCircle * 0.5f, theme.stroke_divider);
         }
 
-        const Color color = done || current ? theme.text : theme.text_disabled;
+        const Color color = enabled_ && (done || current) ? theme.text : theme.text_disabled;
         // DrawText 顶对齐：行盒在圆心带内垂直居中，光学中线与圆心/连接线对齐。
         painter.DrawText(titles_[i], {absolute_.x + step_x_[i] + kCircle + kGapX,
                                       cy - text_h_ * 0.5f,
                                       step_w_[i] - kCircle - kGapX + kGapX, text_h_},
                          TextRole::Caption, color);
     }
+    if (enabled_ && FocusVisible())
+        PaintFocusRing(painter, theme, absolute_, theme.radius_control);
 }
 
 } // namespace lumen
