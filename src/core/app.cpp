@@ -64,6 +64,7 @@ HWND EnsureMsgWindow(std::wstring_view title) {
     if (g_msg_hwnd) return g_msg_hwnd;
     g_msg_hwnd = CreateWindowExW(0, LumenClassName(LumenClass::App), std::wstring(title).c_str(),
                                  0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, LumenModule(), nullptr);
+    if (!g_msg_hwnd) Log(LogLevel::Warn, L"app message window creation failed: %lu", GetLastError());
     return g_msg_hwnd;
 }
 
@@ -82,7 +83,7 @@ void ReleaseMsgWindow() {
             UnregisterHotKey(g_msg_hwnd, slot.id);
         }
         if (IsWindow(g_msg_hwnd) && !DestroyWindow(g_msg_hwnd))
-            throw std::runtime_error("LUMEN app message window destruction failed");
+            Log(LogLevel::Warn, L"app message window destruction failed: %lu", GetLastError());
         g_msg_hwnd = nullptr;
     }
     g_hotkeys.clear();
@@ -322,8 +323,17 @@ bool App::SingleInstance(std::wstring_view name) {
     std::wstring msg_name = L"lumen.activate." + g_single_name;
     g_activate_msg = RegisterWindowMessageW(msg_name.c_str());
     const std::wstring mutex_name = L"Local\\lumen.single." + g_single_name;
+    if (g_single_mutex) {
+        CloseHandle(g_single_mutex);   // 重复调用不泄漏旧句柄
+        g_single_mutex = nullptr;
+    }
     g_single_mutex = CreateMutexW(nullptr, TRUE, mutex_name.c_str());
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    const DWORD mutex_error = GetLastError();
+    if (!g_single_mutex) {
+        Log(LogLevel::Warn, L"single-instance mutex creation failed: %lu", mutex_error);
+        return false;
+    }
+    if (mutex_error == ERROR_ALREADY_EXISTS) {
         AppActivateExisting();
         if (g_single_mutex) {
             CloseHandle(g_single_mutex);

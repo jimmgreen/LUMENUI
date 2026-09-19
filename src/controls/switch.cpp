@@ -25,7 +25,7 @@ Switch& Switch::Checked(bool value) {
 
 Size Switch::Measure(Size, const Theme&) {
     const float width = text_.empty() ? kTrackW : kTrackW + kGap +
-                        MeasureText(text_, TextRole::Body).w;
+                        MeasureText(text_, role_).w;
     return {width, 28.0f};
 }
 
@@ -74,8 +74,8 @@ void Switch::Draw(Painter& painter, const Theme& theme) {
     if (!text_.empty()) {
         painter.DrawText(text_,
                          {absolute_.x + kTrackW + kGap, absolute_.y,
-                          MeasureText(text_, TextRole::Body).w, absolute_.h},
-                         TextRole::Body, enabled_ ? theme.text : theme.text_disabled);
+                          MeasureText(text_, role_).w, absolute_.h},
+                         role_, enabled_ ? theme.text : theme.text_disabled);
     }
 }
 

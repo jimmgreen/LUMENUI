@@ -199,9 +199,9 @@ Size FormField::Measure(Size available, const Theme& theme) {
     desc_h_ = 0.0f;
     error_h_ = 0.0f;
 
-    if (!label_.empty() || required_) header_h_ = kLabelH;
+    if (!label_.empty() || required_) header_h_ = std::max(kLabelH, MeasureText(L"Mg", role_).h);
     if (!description_.empty()) {
-        desc_h_ = MeasureWrapped(description_, TextRole::Caption, label_width);
+        desc_h_ = MeasureWrapped(description_, description_role_, label_width);
         if (desc_h_ < 16.0f) desc_h_ = 16.0f;
         header_h_ += (header_h_ > 0.0f ? kGapInline : 0.0f) + desc_h_;
     }
@@ -217,7 +217,7 @@ Size FormField::Measure(Size available, const Theme& theme) {
     }
 
     if (!error_.empty()) {
-        error_h_ = MeasureWrapped(error_, TextRole::Caption, width);
+        error_h_ = MeasureWrapped(error_, error_role_, width);
         if (error_h_ < 16.0f) error_h_ = 16.0f;
         footer_h_ = kGapToError + error_h_;
     }
@@ -248,24 +248,24 @@ void FormField::Draw(Painter& painter, const Theme& theme) {
         if (!label_.empty()) {
             const float star = required_ ? kStarW : 0.0f;
             const float label_w = std::max(0.0f, (body_left_ > 0.0f ? label_width_ : absolute_.w) - star);
-            const Size ls = MeasureText(label_, TextRole::Body, label_w);
-            painter.DrawText(label_, {x, y, ls.w, kLabelH}, TextRole::Body, fg);
+            const Size ls = MeasureText(label_, role_, label_w);
+            painter.DrawText(label_, {x, y, ls.w, std::max(kLabelH, ls.h)}, role_, fg);
             x += ls.w;
         }
         if (required_) {
-            painter.DrawText(L" *", {x, y, kStarW, kLabelH}, TextRole::Body, theme.accent);
+            painter.DrawText(L" *", {x, y, kStarW, std::max(kLabelH, MeasureText(L"*", role_).h)}, role_, theme.accent);
         }
-        y += kLabelH;
+        y += std::max(kLabelH, MeasureText(L"Mg", role_).h);
     }
     if (!description_.empty()) {
         if (y > absolute_.y) y += kGapInline;
         painter.DrawTextWrapped(description_, {absolute_.x, y, body_left_ > 0.0f ? label_width_ : absolute_.w, desc_h_},
-                                TextRole::Caption, theme.text_secondary);
+                                description_role_, theme.text_secondary);
     }
     if (!error_.empty()) {
         painter.DrawTextWrapped(error_,
                                 {absolute_.x, absolute_.Bottom() - error_h_, absolute_.w, error_h_},
-                                TextRole::Caption, theme.danger);
+                                error_role_, theme.danger);
     }
 }
 

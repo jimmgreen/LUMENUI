@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(lumen VERSION 0.3.0 LANGUAGES CXX RC)
+project(lumen VERSION 0.4.0 LANGUAGES CXX RC)
 
 # 修正中文 VS18 / CMake 的 UTF-8 依赖前缀误解码，防止头文件漏编。
 if(MSVC AND CMAKE_CL_SHOWINCLUDES_PREFIX MATCHES "^娉ㄦ剰:")
@@ -268,6 +268,11 @@ if(LUMEN_BUILD_EXAMPLES)
     add_executable(lumen_host_test examples/host/host_driver.cpp)
     target_link_libraries(lumen_host_test PRIVATE user32)
     add_dependencies(lumen_host_test lumen_host_plugin)
+
+    add_executable(lumen_table_filter_paging_demo WIN32 examples/table_filter_paging.cpp)
+    target_link_libraries(lumen_table_filter_paging_demo PRIVATE lumen::lumen lumen::main)
+    lumen_copy_runtime(lumen_table_filter_paging_demo)
+
     add_executable(lumen_gallery WIN32
         examples/gallery/main.cpp
         examples/gallery/common.cpp
@@ -277,6 +282,8 @@ if(LUMEN_BUILD_EXAMPLES)
         examples/gallery/section_selection.cpp
         examples/gallery/section_layout.cpp
         examples/gallery/section_collections.cpp
+        examples/gallery/table_filter_paging_demo.cpp
+        examples/gallery/log_view_demo.cpp
         examples/gallery/section_navigation.cpp
         examples/gallery/section_overlays.cpp
         examples/gallery/section_status.cpp
@@ -294,6 +301,8 @@ if(LUMEN_BUILD_EXAMPLES)
         examples/gallery/section_selection.cpp
         examples/gallery/section_layout.cpp
         examples/gallery/section_collections.cpp
+        examples/gallery/table_filter_paging_demo.cpp
+        examples/gallery/log_view_demo.cpp
         examples/gallery/section_navigation.cpp
         examples/gallery/section_overlays.cpp
         examples/gallery/section_status.cpp
@@ -329,6 +338,9 @@ if(LUMEN_BUILD_TESTS)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "Check public API naming")
 
+    add_executable(lumen_table_filter_paging_test tests/api/table_filter_paging.cpp)
+    target_link_libraries(lumen_table_filter_paging_test PRIVATE lumen)
+
     set(LUMEN_README_GEN ${CMAKE_CURRENT_BINARY_DIR}/readme_generated.cpp)
     add_custom_command(OUTPUT ${LUMEN_README_GEN}
         COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/tests/api/extract_readme.py
@@ -346,6 +358,7 @@ if(LUMEN_BUILD_TESTS)
         tests/perf/main.cpp
         tests/anim/main.cpp
         tests/api/chain_compile.cpp
+        tests/api/table_filter_paging.cpp
         APPEND PROPERTY OBJECT_DEPENDS ${LUMEN_PUBLIC_HEADERS})
 endif()
 
@@ -415,4 +428,3 @@ if(_lumen_lumatext_source_active AND EXISTS "${LUMATEXT_SOURCE_DIR}/LICENSE")
 elseif(LUMEN_LUMATEXT_RUNTIME_TARGET AND _lumen_licenses)
     install(DIRECTORY "${_lumen_licenses}/" DESTINATION licenses/LumaText)
 endif()
-

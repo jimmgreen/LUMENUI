@@ -33,6 +33,8 @@ class Control;
 
 struct WeakLink {
     void (*clear)(void*) = nullptr;
+    // 控件移动后把观察者槽位重挂到新地址（WeakRef::Reset 装填）。
+    void (*rebind)(void* slot, Control* host) = nullptr;
     void* slot = nullptr;
     WeakLink* next = nullptr;
     WeakLink* prev = nullptr;
@@ -419,6 +421,8 @@ private:
     WeakLink* weak_head_ = nullptr;
     ScopedConnection bind_visible_;
     ScopedConnection bind_enabled_;
+    Property<bool>* bound_visible_prop_ = nullptr;
+    Property<bool>* bound_enabled_prop_ = nullptr;
     void StealFrom(Control& other) noexcept;
 };
 
@@ -449,6 +453,7 @@ public:
         ptr_ = p;
         if (!p) return;
         link_.clear = [](void* s) { *static_cast<T**>(s) = nullptr; };
+        link_.rebind = [](void* s, Control* host) { *static_cast<T**>(s) = static_cast<T*>(host); };
         link_.slot = &ptr_;
         p->AttachWeak(&link_);
     }
@@ -469,6 +474,7 @@ private:
         if (link_.next) link_.next->prev = &link_;
         link_.slot = &ptr_;
         link_.clear = [](void* s) { *static_cast<T**>(s) = nullptr; };
+        link_.rebind = [](void* s, Control* host) { *static_cast<T**>(s) = static_cast<T*>(host); };
     }
 
     T* ptr_ = nullptr;

@@ -9,6 +9,7 @@ out/
 !docs/**/*.jpg
 
 # Local credentials and private key material
+/.c2c.json
 .env
 .env.*
 !.env.example
@@ -16,3 +17,7 @@ out/
 *.key
 *.pfx
 *.p12
+
+# Generated local test logs and disposable optimization evidence
+/textbox-*.log
+/artifacts/optimization-*/

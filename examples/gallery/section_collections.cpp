@@ -173,9 +173,9 @@ void BuildCollections(lumen::StackPanel& column, lumen::Window& window) {
     auto& tally = board.Add<Label>(L"", TextRole::Caption).Secondary(true);
     auto& task_table = board.Add<Table>().FillCross().MinSize({0.0f, 180.0f}).MaxSize({0.0f, 180.0f}).RowHeight(36.0f);
     task_table.Bind(tasks->visible);
-    task_table.AddColumn(L"Task");
-    task_table.AddColumn(L"Status", 140.0f);
-    task_table.AddColumn(L"Owner", 120.0f);
+    task_table.AddColumn(L"Task").Sortable(true);
+    task_table.AddColumn(L"Status", 140.0f).Sortable(true);
+    task_table.AddColumn(L"Owner", 120.0f).Sortable(true);
     auto& empty = board.Add<EmptyState>();
     empty.Title(L"No matching tasks").Hint(L"Try a different search or clear the filter.");
     auto refresh_tasks = [tasks, &search, &task_table, &empty, &tally] {
@@ -340,22 +340,36 @@ void BuildCollections(lumen::StackPanel& column, lumen::Window& window) {
         });
     }
     model_table.Bind(people).Column(L"Name", &ItemData::text, 160.0f);
-    model_table.AddColumn(L"Glyph", 56.0f).Icon([](size_t row, std::wstring& s) {
+    model_table.AddColumn(L"Glyph", 112.0f).Icon([](size_t row, std::wstring& s) {
         s = row < people.Count() ? people.At(row).glyph : L"";
     });
+
+    BuildTableFilterPagingDemo(column, window);
 
     auto& table_card = Sample(
         column, L"Table",
         L"Pin, drag headers to reorder, right-click columns, Shift+click multi-sort. "
-        L"Arrows move cells, F2 edits, Ctrl+C copies TSV. Grouped by Environment.");
+        L"Arrows move cells, F2 edits, Ctrl+C copies TSV. Header checkbox toggles all rows (Ctrl+Space). Grouped by Environment.");
     static std::vector<uint8_t> checked(100000, 0);
+    static size_t checked_count = 0;
     static std::unordered_map<size_t, std::wstring> notes;
     auto& table = table_card.Add<Table>();
     table.RowHeight(40.0f);
     table.AddColumn(L"#", 64.0f).Sortable(true).Frozen().Aggregate(ColumnAggregate::Count);
-    table.AddColumn(L"On", 56.0f).CheckBox(
+    table.AddColumn(L"On", 72.0f).CheckBox(
         [](size_t row) { return checked[row] != 0; },
-        [](size_t row, bool value) { checked[row] = value ? 1 : 0; });
+        [](size_t row, bool value) {
+            if ((checked[row] != 0) != value) {
+                if (value) ++checked_count; else --checked_count;
+                checked[row] = value ? 1 : 0;
+            }
+        }).HeaderCheckBox(
+            [] { return checked_count == 0 ? CheckState::Unchecked :
+                        checked_count == checked.size() ? CheckState::Checked : CheckState::Indeterminate; },
+            [](bool value) {
+                std::fill(checked.begin(), checked.end(), value ? uint8_t{1} : uint8_t{0});
+                checked_count = value ? checked.size() : 0;
+            });
     table.AddColumn(L"Note").TextBox(
         [](size_t row) -> std::wstring {
             const auto it = notes.find(row);
@@ -513,20 +527,7 @@ void BuildCollections(lumen::StackPanel& column, lumen::Window& window) {
         else out.clear();
     });
 
-    auto& log_card = Sample(column, L"LogView", L"Monospace, follow-tail, Ctrl+C copies the selected line.");
-    auto& log = Wide(log_card).Add<LogView>();
-    log.Grow()
-        .Follow(true)
-        .ItemCount(240)
-        .LineText([](size_t i, std::wstring& s) {
-            s = L"[" + std::to_wstring(i) + L"] pulse replica heartbeat";
-        })
-        .LineLevel([](size_t i) {
-            if (i % 17 == 0) return LogLevel::Error;
-            if (i % 7 == 0) return LogLevel::Warn;
-            if (i % 5 == 0) return LogLevel::Debug;
-            return LogLevel::Info;
-        });
+    BuildLogViewDemo(column, window);
 
     auto& grid_card = Sample(column, L"GridView", L"Virtualized icon grid. Right-click for a Menu.");
     auto& tiles = grid_card.Add<GridView>();

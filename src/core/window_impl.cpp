@@ -680,12 +680,7 @@ void Window::ClearTimer(TimerId id) { impl_->ClearTimer(id); }
 void Window::BindShortcut(std::wstring_view chord, std::function<void()> fn) {
     impl_->BindShortcut(chord, std::move(fn));
 }
-void Window::Bind(Command& command) {
-    if (command.Shortcut().empty()) return;
-    impl_->BindShortcut(command.Shortcut(), [&command] {
-        if (command.Enabled()) command.Execute();
-    });
-}
+void Window::Bind(Command& command) { impl_->BindCommand(command); }
 void Window::RememberPlacement(std::wstring_view registry_path) {
     impl_->RememberPlacement(registry_path);
 }
@@ -807,6 +802,7 @@ WindowImpl::WindowImpl(Window* api, std::wstring_view title, Size client_size, F
 }
 
 WindowImpl::~WindowImpl() {
+    if (frame_alive_) frame_alive_->signal = nullptr;   // OnFrame 连接此后断开成为 no-op
     PopupWindow::OwnerDestroyed(this);
     // 先关投递端口：后台线程的结果从此只能标记 Dropped，不会再触碰本对象。
     port_->Close();
@@ -1138,12 +1134,15 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     case WM_SYSKEYDOWN:
         if (OnKeyDown(static_cast<uint32_t>(wparam))) return 0;
         break;
-    case WM_CHAR:
+    case WM_CHAR: {
         // 行内组字期间拼音由 WM_IME_COMPOSITION 更新，再走 OnChar 会把拉丁字母写进文本。
-        if (focused_ && !focused_->ImeComposing()) {
-            focused_->OnChar(static_cast<wchar_t>(wparam));
+        // 焦点链失效（隐藏/祖先禁用）不派发；OnChar 可能弹模态菜单或销毁控件，WeakRef 兜底。
+        if (focused_ && IsFocusChainUsable(focused_) && !IsImeComposing(focused_)) {
+            WeakRef<Control> target(focused_);
+            target->OnChar(static_cast<wchar_t>(wparam));
         }
         return 0;
+    }
     case WM_IME_CHAR:
         if (ImeTarget() && ImeTarget()->ImeInline()) return 0;
         break;
@@ -1156,9 +1155,13 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         return r;
     }
     case WM_IME_STARTCOMPOSITION:
+        // 先记住原生会话，再同步候选窗；首个 GCS_COMPSTR 到达前也不能写入拼音字母。
+        if (ImeTarget() && ImeTarget()->ImeInline()) {
+            native_ime_target_ = ImeTarget();
+            SyncImeCaret();
+            return 0;
+        }
         SyncImeCaret();
-        // DefWindowProc 会造系统组字窗（拼音浮在框外那块白底）。行内组字必须吃掉。
-        if (ImeTarget() && ImeTarget()->ImeInline()) return 0;
         break;
     case WM_IME_COMPOSITION:
         if (ImeTarget() && ImeTarget()->ImeInline()) {
@@ -1167,14 +1170,17 @@ LRESULT WindowImpl::Handle(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         SyncImeCaret();
         break;
-    case WM_IME_ENDCOMPOSITION:
-        if (ImeTarget() && ImeTarget()->ImeInline()) {
+    case WM_IME_ENDCOMPOSITION: {
+        WeakRef<Control> target(native_ime_target_ ? native_ime_target_.Get() : ImeTarget());
+        native_ime_target_.Reset();
+        if (target && target->ImeInline()) {
             const auto port = port_;
-            ImeTarget()->OnImeEnd();
+            target->OnImeEnd();
             if (port->target.load(std::memory_order_acquire)) SyncImeCaret();
             return 0;
         }
         break;
+    }
     case WM_IME_NOTIFY:
         if (wparam == IMN_OPENCANDIDATE || wparam == IMN_CHANGECANDIDATE) {
             SyncImeCaret();
@@ -1475,7 +1481,8 @@ Connection WindowImpl::OnFrame(std::function<bool(float)> fn) {
     frame_cbs_.push_back(FrameCb{id, std::move(fn)});
     RequestAnimation(nullptr);
     return Connection(
-        [](void* p, uint64_t i) { static_cast<WindowImpl*>(p)->DisconnectFrame(i); }, this, id);
+        [](void* p, uint64_t i) { static_cast<WindowImpl*>(p)->DisconnectFrame(i); }, this, id,
+        frame_alive_);
 }
 
 void WindowImpl::DisconnectFrame(uint64_t id) {
@@ -1685,9 +1692,21 @@ bool WindowImpl::HitTestBody(Window* window, std::wstring_view text, float x_dip
     if (!window || !index) return false;
     WindowImpl* impl = window->Impl();
     LumaTextBridge* luma = impl->renderer_.Luma();
-    if (!luma || !luma->Enabled()) return false;
     IDWriteTextFormat* format = UiText().Format(role);
-    return luma->HitTestPoint(text, format, impl->scale_, x_dip, index);
+    if (luma && luma->Enabled() && luma->HitTestPoint(text, format, impl->scale_, x_dip, index))
+        return true;
+    // 自定义字体的绘制回退 DirectWrite；命中也须用同一完整行布局，
+    // 不能让 TextBox 累加逐字宽度（字距调整、回退字体和塑形会导致坐标漂移）。
+    if (!format) return false;
+    if (text.empty()) { *index = 0; return true; }
+    auto* layout = UiText().LineLayout(text, format, 1.0e4f, Align::Leading);
+    if (!layout) return false;
+    BOOL trailing = FALSE, inside = FALSE;
+    DWRITE_HIT_TEST_METRICS hit{};
+    if (FAILED(layout->HitTestPoint(x_dip, 0.0f, &trailing, &inside, &hit))) return false;
+    *index = std::min(text.size(), static_cast<size_t>(hit.textPosition) +
+                                     (trailing ? static_cast<size_t>(hit.length) : 0));
+    return true;
 }
 
 bool WindowImpl::CaretXBody(Window* window, std::wstring_view text, size_t index, float* x_dip,
@@ -1695,9 +1714,18 @@ bool WindowImpl::CaretXBody(Window* window, std::wstring_view text, size_t index
     if (!window || !x_dip) return false;
     WindowImpl* impl = window->Impl();
     LumaTextBridge* luma = impl->renderer_.Luma();
-    if (!luma || !luma->Enabled()) return false;
     IDWriteTextFormat* format = UiText().Format(role);
-    return luma->PositionToX(text, format, impl->scale_, index, x_dip);
+    if (luma && luma->Enabled() && luma->PositionToX(text, format, impl->scale_, index, x_dip))
+        return true;
+    // 与 HitTestBody、TextBox::Draw 的 DirectWrite 路径共用完整布局和 DIP 坐标。
+    if (!format) return false;
+    if (text.empty()) { *x_dip = 0.0f; return true; }
+    auto* layout = UiText().LineLayout(text, format, 1.0e4f, Align::Leading);
+    if (!layout) return false;
+    float y = 0.0f;
+    DWRITE_HIT_TEST_METRICS hit{};
+    return SUCCEEDED(layout->HitTestTextPosition(static_cast<UINT32>(std::min(index, text.size())),
+                                                 FALSE, x_dip, &y, &hit));
 }
 
 
@@ -2014,6 +2042,23 @@ void WindowImpl::BindShortcut(std::wstring_view chord, std::function<void()> fn)
                                     [&](const Shortcut& s) { return s.chord == key; }),
                      shortcuts_.end());
     if (fn) shortcuts_.push_back(Shortcut{key, std::move(fn)});
+}
+
+// 命令快捷键随命令生命周期：命令销毁即撤快捷键。连接条目在下一次绑定或窗口析构时
+// 惰性清理——OnDestroyed 回调正在析构该连接本身，不能在回调里动容器。
+void WindowImpl::BindCommand(Command& command) {
+    if (command.Shortcut().empty()) return;
+    for (auto it = command_shortcuts_.begin(); it != command_shortcuts_.end();) {
+        if (!it->second) it = command_shortcuts_.erase(it);
+        else ++it;
+    }
+    Command* cmd = &command;
+    command_shortcuts_.emplace_back(cmd, ScopedConnection(command.OnDestroyed([this, cmd] {
+        BindShortcut(cmd->Shortcut(), {});
+    })));
+    BindShortcut(command.Shortcut(), [cmd] {
+        if (cmd->Enabled()) cmd->Execute();
+    });
 }
 
 void WindowImpl::RememberPlacement(std::wstring_view registry_path) {

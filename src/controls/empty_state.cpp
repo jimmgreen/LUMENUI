@@ -21,6 +21,16 @@ EmptyState::EmptyState() {
     hint_->Visible(false);
 }
 
+TextRole EmptyState::TitleRole() const noexcept { return title_->Role(); }
+EmptyState& EmptyState::TitleRole(TextRole value) { title_->Role(value); return *this; }
+TextRole EmptyState::HintRole() const noexcept { return hint_->Role(); }
+EmptyState& EmptyState::HintRole(TextRole value) { hint_->Role(value); return *this; }
+EmptyState& EmptyState::ActionRole(TextRole value) {
+    action_role_ = value;
+    if (action_) action_->Role(value);
+    return *this;
+}
+
 EmptyState& EmptyState::Title(std::wstring_view value) {
     title_->Text(value);
     return *this;
@@ -50,7 +60,7 @@ EmptyState& EmptyState::Action(std::wstring_view label, std::function<void()> on
     if (!action_) {
         action_ = &Add<Button>(L"", ButtonKind::Primary);
     }
-    action_->Text(std::wstring(label));
+    action_->Role(action_role_).Text(std::wstring(label));
     action_->OnClick(std::move(on_click));
     action_->Visible(!label.empty());
     return *this;

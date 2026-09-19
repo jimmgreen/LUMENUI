@@ -28,10 +28,10 @@ void SettingsCard::ComputeGeometry(float width) {
     const bool below = tail_width > 0.0f && inner - glyph - tail_width - kTextTailGap < kMinTextW;
     text_left_ = pad_ + glyph;
     text_width_ = std::max(0.0f, inner - glyph - (!below && tail_width > 0.0f ? tail_width + kTextTailGap : 0.0f));
-    title_height_ = title_.empty() ? 0.0f : MeasureWrapped(title_, TextRole::BodyStrong, std::max(1.0f, text_width_));
+    title_height_ = title_.empty() ? 0.0f : MeasureWrapped(title_, title_role_, std::max(1.0f, text_width_));
     text_height_ = title_height_;
     if (!description_.empty()) text_height_ += (title_.empty() ? 0.0f : kTitleGap) +
-        MeasureWrapped(description_, TextRole::Caption, std::max(1.0f, text_width_));
+        MeasureWrapped(description_, description_role_, std::max(1.0f, text_width_));
     text_height_ = std::max(text_height_, glyph > 0.0f ? 32.0f : 0.0f);
     tail_bounds_.resize(ChildCount());
     float x = below ? pad_ : width - pad_ - tail_width;
@@ -98,14 +98,14 @@ void SettingsCard::Draw(Painter& painter, const Theme& theme) {
     const Color text_color = enabled_ ? theme.text : theme.text_disabled;
     float y = absolute_.y + pad_;
     if (!title_.empty()) {
-        painter.DrawTextWrapped(title_, {absolute_.x + text_left_, y, text_width_, title_height_}, TextRole::BodyStrong,
+        painter.DrawTextWrapped(title_, {absolute_.x + text_left_, y, text_width_, title_height_}, title_role_,
                          text_color);
         y += title_height_;
     }
     if (!description_.empty()) {
         if (!title_.empty()) y += kTitleGap;
         painter.DrawTextWrapped(description_, {absolute_.x + text_left_, y, text_width_, absolute_.y + pad_ + text_height_ - y},
-                                TextRole::Caption, theme.text_secondary);
+                                description_role_, theme.text_secondary);
     }
     if (HasFocus()) {
         PaintFocusRing(painter, theme, absolute_, theme.radius_card);

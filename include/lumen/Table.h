@@ -1,5 +1,5 @@
 // lumen/Table.h — 虚拟化表格：表头 + 可见行复用交互控件（CheckBox/Button/TextBox）。
-// Events: OnSelectionChanged / BindSelectionChanged / OnSortChanged / BindSortChanged / OnCellEdited / BindCellEdited / OnFrozenChanged / BindFrozenChanged / OnColumnVisibilityChanged / BindColumnVisibilityChanged / OnCellHover
+// Events: OnSelectionChanged / BindSelectionChanged / OnSortChanged / BindSortChanged / OnCellEdited / BindCellEdited / OnFrozenChanged / BindFrozenChanged / OnColumnVisibilityChanged / BindColumnVisibilityChanged / OnFilterChanged / BindFilterChanged / OnCellHover
 // Keys: 焦点控件处理 Enter/Space/方向键等，详见 OnKey
 // Layout: Grow / FillCross / Margin 走 ControlOf；默认尺寸见 Measure
 #pragma once
@@ -21,9 +21,11 @@
 namespace lumen {
 
 class TableColumnRef;
+enum class CheckState;
 
 enum class CellKind { Text, CheckBox, Button, TextBox, Progress, Icon };
 enum class ColumnAggregate { None, Count, Sum, Average, Min, Max };
+enum class TableFilterKind { None, Text, NumberRange, Choice, Boolean };
 
 struct TableSortKey {
     int col = -1;
@@ -40,15 +42,53 @@ struct TableColumnState {
     float width = 0.0f;
     bool visible = true, frozen = false;
 };
+struct TableFilterState {
+    std::wstring text;
+    std::optional<double> minimum;
+    std::optional<double> maximum;
+    std::vector<std::wstring> values;
+    std::optional<bool> boolean;
+
+    bool Empty() const noexcept {
+        return text.empty() && !minimum && !maximum && values.empty() && !boolean.has_value();
+    }
+    bool operator==(const TableFilterState&) const = default;
+};
 
 class Table : public PanelOf<Table> {
 public:
     Table();
     ~Table() override;
+    TextRole Role() const noexcept { return role_; }
+    Table& Role(TextRole value);
+    TextRole HeaderRole() const noexcept { return header_role_; }
+    Table& HeaderRole(TextRole value) { header_role_ = value; RelayoutParent(); return *this; }
     // width 为 DIP；0 表示弹性列（多列均分剩余）。视口不够时保底 96 DIP，超出横向滚动。
     // AddColumn(L"On", 64.0f).CheckBox(get, set).Sortable(true)；可隐式转回列下标。
     // 表头右侧图钉切换 Frozen；列边界 ±4 DIP 拖拽改宽。
     TableColumnRef AddColumn(std::wstring_view title, float width = 0.0f);
+    size_t ColumnCount() const noexcept { return columns_.size(); }
+    std::wstring_view ColumnTitle(int col) const noexcept;
+
+    // ---- 外部过滤 UI 契约 ----
+    // Table 只保存列过滤元数据/状态并发通知；不会自行过滤数据、改变 RowCount 或 order_。
+    // 业务侧应在 OnFilterChanged 后驱动 FilteredModel、远端请求或其他自定义模型。
+    Table& ColumnFilterKind(int col, TableFilterKind kind);
+    TableFilterKind ColumnFilterKind(int col) const noexcept;
+    Table& ColumnFilterChoices(int col, std::vector<std::wstring> choices);
+    const std::vector<std::wstring>& ColumnFilterChoices(int col) const noexcept;
+    Table& ColumnFilter(int col, TableFilterState state);
+    const TableFilterState& ColumnFilter(int col) const noexcept;
+    Table& ClearFilter(int col);
+    Table& ClearFilters();
+    size_t ActiveFilterCount() const noexcept;
+    Table& OnFilterChanged(std::function<void(int col, TableFilterState state)> handler) {
+        filter_changed_.Subscribe(std::move(handler));
+        return *this;
+    }
+    Connection BindFilterChanged(std::function<void(int col, TableFilterState state)> handler) {
+        return filter_changed_.Connect(std::move(handler));
+    }
 
     void RefreshRows(size_t index, size_t count);
     Table& RowCount(size_t count);
@@ -181,6 +221,11 @@ public:
     Table& CellEditable(std::function<bool(size_t data_row, int col)> predicate);
     // 数字列小数位；-1 = 自适应修整（默认）。仅影响显示，排序始终按原始数值。
     Table& ColumnPrecision(int col, int decimals);
+    // 空值恢复按列类型自动对齐；不改变数值校验和排序。
+    Table& ColumnAlignment(int col, std::optional<Align> value);
+    // O(1) model summary; Ctrl+Space toggles the active column header.
+    Table& BindHeaderCheckBox(int col, std::function<CheckState()> get,
+                              std::function<void(bool)> set);
     Table& BindCheckBox(int col, std::function<bool(size_t)> get,
                         std::function<void(size_t, bool)> set);
     Table& BindButton(int col, std::wstring caption,
@@ -465,6 +510,12 @@ protected:
     int ResizeBoundaryAt(Point local) const;
     int HeaderPinAt(Point local) const;
     Rect BodyViewport() const noexcept;
+    Rect GroupHeaderContentRect(float y, float frozen_width) const noexcept {
+        // 分组头文字与箭头从冻结分隔线之后开始；视口不宽于冻结带时收缩为 0，不横跨分隔线。
+        const float left = absolute_.x + std::max(0.0f, frozen_width);
+        const float right = absolute_.x + std::max(0.0f, absolute_.w);
+        return {left, y, right > left ? right - left : 0.0f, GroupBand()};
+    }
     Rect FooterRect() const noexcept;
     Rect VerticalTrack() const noexcept;
     Rect HorizontalTrack() const noexcept;
@@ -492,6 +543,7 @@ protected:
     void MarkFooterRows(size_t index, size_t count);
     std::wstring FooterText(size_t col) const;
     uint64_t ColumnFingerprint() const noexcept;
+    TableFilterState NormalizeFilterState(int col, TableFilterState state) const;
 
     struct ColumnDef {
         std::wstring title;
@@ -501,6 +553,11 @@ protected:
         bool visible = true;
         CellKind kind = CellKind::Text;
         ColumnAggregate aggregate = ColumnAggregate::None;
+        TableFilterKind filter_kind = TableFilterKind::None;
+        std::vector<std::wstring> filter_choices;
+        TableFilterState filter_state;
+        std::function<CheckState()> header_check_get;
+        std::function<void(bool)> header_check_set;
         std::function<bool(size_t)> cb_get;
         std::function<void(size_t, bool)> cb_set;
         std::wstring btn_caption;
@@ -514,6 +571,7 @@ protected:
         int precision = -1;                      // -1 = 自适应修整
         bool numeric = false;
         bool numeric_text = false;
+        std::optional<Align> alignment;
         std::function<void(size_t, std::wstring&)> icon_get;
         std::function<void(size_t, std::wstring&)> text_get;
         std::function<void(size_t, std::wstring&)> display_get;
@@ -532,6 +590,8 @@ protected:
         size_t child_index = static_cast<size_t>(-1);
     };
 
+    TextRole role_ = TextRole::Caption;
+    TextRole header_role_ = TextRole::CaptionStrong;
     std::vector<ColumnDef> columns_;
     std::vector<size_t> visual_;   // 视觉顺序 → 数据列
     std::vector<Slot> slots_;
@@ -579,11 +639,8 @@ protected:
     bool dragging_ = false;
     bool horizontal_dragging_ = false;
     float drag_grab_ = 0.0f;
-    // 内嵌编辑与同一行 Caption 单元格同字号；TextBox 默认 Body 会明显偏大。
-    class TableTextBox : public TextBox {
-    protected:
-        TextRole ContentRole() const noexcept override { return TextRole::Caption; }
-    };
+    // 行内编辑器与正文共享可配置文字角色。
+    using TableTextBox = TextBox;
     // 行内编辑器：回车/Tab 提交（数字格非法拒绝、保持打开供修正），Esc 取消，
     // 失焦提交（数字格失焦非法回退不写回）。Tab 提交并移到下一可编辑格。
     class CellEditor : public TableTextBox {
@@ -668,6 +725,7 @@ protected:
     Signal<int, int> sort_changed_;
     Signal<int, bool> frozen_changed_;
     Signal<int, bool> column_visibility_changed_;
+    Signal<int, TableFilterState> filter_changed_;
     Signal<> columns_changed_;
     Signal<ptrdiff_t, ptrdiff_t> selection_changed_;
     Signal<ptrdiff_t, int, bool> cell_hover_;
@@ -676,6 +734,124 @@ protected:
     struct DrawCache;
     std::unique_ptr<DrawCache> draw_cache_;
 };
+
+inline std::wstring_view Table::ColumnTitle(int col) const noexcept {
+    return col >= 0 && static_cast<size_t>(col) < columns_.size()
+               ? std::wstring_view(columns_[static_cast<size_t>(col)].title)
+               : std::wstring_view{};
+}
+
+inline TableFilterState Table::NormalizeFilterState(int col, TableFilterState state) const {
+    if (col < 0 || static_cast<size_t>(col) >= columns_.size()) return {};
+    const auto& column = columns_[static_cast<size_t>(col)];
+    switch (column.filter_kind) {
+    case TableFilterKind::Text:
+        state.minimum.reset(); state.maximum.reset(); state.values.clear(); state.boolean.reset();
+        break;
+    case TableFilterKind::NumberRange:
+        state.text.clear(); state.values.clear(); state.boolean.reset();
+        if (state.minimum && !std::isfinite(*state.minimum)) state.minimum.reset();
+        if (state.maximum && !std::isfinite(*state.maximum)) state.maximum.reset();
+        if (state.minimum && state.maximum && *state.minimum > *state.maximum)
+            std::swap(state.minimum, state.maximum);
+        break;
+    case TableFilterKind::Choice: {
+        state.text.clear(); state.minimum.reset(); state.maximum.reset(); state.boolean.reset();
+        std::vector<std::wstring> values;
+        values.reserve(state.values.size());
+        for (auto& value : state.values) {
+            if (!column.filter_choices.empty() &&
+                std::find(column.filter_choices.begin(), column.filter_choices.end(), value) == column.filter_choices.end())
+                continue;
+            if (std::find(values.begin(), values.end(), value) == values.end()) values.push_back(std::move(value));
+        }
+        state.values = std::move(values);
+        break;
+    }
+    case TableFilterKind::Boolean:
+        state.text.clear(); state.minimum.reset(); state.maximum.reset(); state.values.clear();
+        break;
+    case TableFilterKind::None:
+        state = {};
+        break;
+    }
+    return state;
+}
+
+inline Table& Table::ColumnFilterKind(int col, TableFilterKind kind) {
+    if (col < 0 || static_cast<size_t>(col) >= columns_.size()) return *this;
+    auto& column = columns_[static_cast<size_t>(col)];
+    if (column.filter_kind == kind) return *this;
+    column.filter_kind = kind;
+    const TableFilterState normalized = NormalizeFilterState(col, column.filter_state);
+    if (!(normalized == column.filter_state)) {
+        column.filter_state = normalized;
+        filter_changed_.Emit(col, column.filter_state);
+    }
+    return *this;
+}
+
+inline TableFilterKind Table::ColumnFilterKind(int col) const noexcept {
+    return col >= 0 && static_cast<size_t>(col) < columns_.size()
+               ? columns_[static_cast<size_t>(col)].filter_kind
+               : TableFilterKind::None;
+}
+
+inline Table& Table::ColumnFilterChoices(int col, std::vector<std::wstring> choices) {
+    if (col < 0 || static_cast<size_t>(col) >= columns_.size()) return *this;
+    std::vector<std::wstring> unique;
+    unique.reserve(choices.size());
+    for (auto& choice : choices) {
+        if (std::find(unique.begin(), unique.end(), choice) == unique.end()) unique.push_back(std::move(choice));
+    }
+    auto& column = columns_[static_cast<size_t>(col)];
+    if (column.filter_choices == unique) return *this;
+    column.filter_choices = std::move(unique);
+    const TableFilterState normalized = NormalizeFilterState(col, column.filter_state);
+    if (!(normalized == column.filter_state)) {
+        column.filter_state = normalized;
+        filter_changed_.Emit(col, column.filter_state);
+    }
+    return *this;
+}
+
+inline const std::vector<std::wstring>& Table::ColumnFilterChoices(int col) const noexcept {
+    static const std::vector<std::wstring> empty;
+    return col >= 0 && static_cast<size_t>(col) < columns_.size()
+               ? columns_[static_cast<size_t>(col)].filter_choices
+               : empty;
+}
+
+inline Table& Table::ColumnFilter(int col, TableFilterState state) {
+    if (col < 0 || static_cast<size_t>(col) >= columns_.size()) return *this;
+    state = NormalizeFilterState(col, std::move(state));
+    auto& current = columns_[static_cast<size_t>(col)].filter_state;
+    if (current == state) return *this;
+    current = std::move(state);
+    filter_changed_.Emit(col, current);
+    return *this;
+}
+
+inline const TableFilterState& Table::ColumnFilter(int col) const noexcept {
+    static const TableFilterState empty;
+    return col >= 0 && static_cast<size_t>(col) < columns_.size()
+               ? columns_[static_cast<size_t>(col)].filter_state
+               : empty;
+}
+
+inline Table& Table::ClearFilter(int col) { return ColumnFilter(col, {}); }
+
+inline Table& Table::ClearFilters() {
+    UpdateScope update;
+    for (size_t i = 0; i < columns_.size(); ++i) ClearFilter(static_cast<int>(i));
+    return *this;
+}
+
+inline size_t Table::ActiveFilterCount() const noexcept {
+    return static_cast<size_t>(std::count_if(columns_.begin(), columns_.end(), [](const ColumnDef& column) {
+        return !column.filter_state.Empty();
+    }));
+}
 
 // AddColumn 的流式代理：table.AddColumn(L"On", 64.0f).CheckBox(get, set).Sortable(true)。
 // 可隐式转回列下标（int），既有按下标配置的 API 不受影响。
@@ -694,8 +870,22 @@ public:
     TableColumnRef& Sizing(float minimum, float preferred, float maximum, float weight = 1.0f) {
         table_->ColumnSizing(index_, minimum, preferred, maximum, weight); return *this;
     }
+    TableColumnRef& Alignment(std::optional<Align> value) {
+        table_->ColumnAlignment(index_, value); return *this;
+    }
+    TableColumnRef& Filterable(TableFilterKind kind) {
+        table_->ColumnFilterKind(index_, kind); return *this;
+    }
+    TableColumnRef& FilterChoices(std::vector<std::wstring> choices) {
+        table_->ColumnFilterChoices(index_, std::move(choices)); return *this;
+    }
     TableColumnRef& Kind(CellKind kind) {
         table_->ColumnKind(index_, kind);
+        return *this;
+    }
+    TableColumnRef& HeaderCheckBox(std::function<CheckState()> get,
+                                   std::function<void(bool)> set) {
+        table_->BindHeaderCheckBox(index_, std::move(get), std::move(set));
         return *this;
     }
     TableColumnRef& CheckBox(std::function<bool(size_t)> get,

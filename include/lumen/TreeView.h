@@ -16,6 +16,9 @@ namespace lumen {
 
 class TreeView : public ControlOf<TreeView> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    TreeView& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     static constexpr size_t kNone = static_cast<size_t>(-1);
 
     // 根节点数量。数据结构变化（增删节点）后重新调用即可重建视图。
@@ -95,6 +98,7 @@ public:
     size_t VisibleIdAt(size_t row) const { return visible_[row]; }
 
 protected:
+    TextRole role_ = TextRole::Body;
     friend class WindowImpl;
     Size Measure(Size, const Theme&) override;
     void Draw(Painter& painter, const Theme& theme) override;

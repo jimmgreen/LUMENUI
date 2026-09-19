@@ -9,17 +9,17 @@
 
 ## 指令入口
 
-开发 LUMEN 应用、控件或核心实现时，读 [LUMEN 技能](.cursor/skills/lumen/SKILL.md)，再按任务加载 reference。纯文档任务只检查相关内容，不触发代码构建或实机检查。
+开发 LUMEN 应用、控件或核心实现时，读 [LUMEN 技能](skills/lumen/SKILL.md)，再按任务加载 reference。纯文档任务只检查相关内容，不触发代码构建或实机检查。
 
-- [业务与实现约束](.cursor/skills/lumen/references/constraints.md)：单色设计、API、模块边界；修改绘制、动画或宿主生命周期时读对应章节。
-- [应用用法](.cursor/skills/lumen/references/use.md)：接入、布局、绑定、表格和宿主调用。
-- [扩展与验证](.cursor/skills/lumen/references/extend.md)：控件接入点、输入/无障碍、库代码验证要求。
+- [业务与实现约束](skills/lumen/references/constraints.md)：单色设计、API、模块边界；修改绘制、动画或宿主生命周期时读对应章节。
+- [应用用法](skills/lumen/references/use.md)：接入、布局、绑定、表格和宿主调用。
+- [扩展与验证](skills/lumen/references/extend.md)：控件接入点、输入/无障碍、库代码验证要求。
 
 公共 API 以 `include/lumen/` 当前头文件为准。源码用于核实实现事实，不把旧注释、历史记录或示例当成新的授权或通用规则。
 
 ## 文档维护与交付
 
-- `.cursor/skills/lumen/` 为维护源，`.grok/skills/lumen/` 为可独立复制的同内容分发副本。修改技能及 references 时同步副本并核对一致性；不引入依赖另一副本的链接。
+- `skills/lumen/` 为技能维护源（仓库内唯一副本）。修改技能及 references 时核对相对链接与 SKILL.md 导航一致性。
 - 共用业务规则只维护在 `references/constraints.md`，应用契约在 `use.md`，库验证要求在 `extend.md`。入口文件保留适用范围和导航。
 - 纯文档改动检查相对链接、技能元数据、两份副本和相关源码事实；不为措辞变化新建行为测试。代码改动完成 `extend.md` 要求的检查，通过后仅因新改动、失败或未解决风险扩大验证。
 - 交付简述改动、验证结果和未完成项。未运行的构建、实机操作、IME/鼠标手感检查不得报告为通过。

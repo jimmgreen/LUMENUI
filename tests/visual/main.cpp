@@ -1,5 +1,6 @@
 // visual — 视觉回归：离屏渲染 LUMEN 控件状态板 → PNG + 像素断言（单暗色主题）。
 #include "lumen/lumen.h"
+#include "lumen/UpdateScope.h"
 #include "core/offscreen.h"
 #include "core/lumatext_bridge.h"
 #include "core/text_service.h"
@@ -224,6 +225,7 @@ struct TestTextBox : TextBox {
     using TextBox::WordLeft;
     using TextBox::EnsureEditMenu;
     using TextBox::CaretX;
+    using TextBox::HitIndex;
     using Control::MeasureText;
     size_t CaretIndex() const noexcept { return caret_; }
     size_t AnchorIndex() const noexcept { return anchor_; }
@@ -284,6 +286,9 @@ struct TestBreadcrumb : Breadcrumb {
 
 struct TestTable : Table {
     using Table::Measure;
+    using Table::GroupHeaderContentRect;
+    using Table::HeaderHeight;
+    using Table::GroupBand;
     using Table::AutomationItemName;
     using Table::OnMouseDown;
     using Table::OnMouseMove;
@@ -395,6 +400,11 @@ struct TestChart : Chart {
     using Chart::OnAnimate;
 };
 struct TestLog : LogView {
+    using LogView::OnKey;
+    using LogView::Prepare;
+    using LogView::Draw;
+    using LogView::AutomationItemName;
+    float Offset() const { return target_offset_; }
     using LogView::Measure;
     using LogView::Arrange;
     using LogView::OnWheel;
@@ -1153,6 +1163,48 @@ void TestInteraction() {
     }
 
     {
+        Window window(L"ime-native-boundaries", {480.0f, 260.0f});
+        auto& box = window.Root().Add<TestTextBox>();
+        box.Multiline(true).Role(TextRole::Caption);
+        window.Show();
+        window.LayoutNow();
+        box.Focus();
+        const auto hwnd = static_cast<HWND>(window.NativeHandle());
+        box.Text(L"地");
+        SendMessageW(hwnd, WM_IME_STARTCOMPOSITION, 0, 0);
+        SendMessageW(hwnd, WM_CHAR, L'd', 0);
+        SendMessageW(hwnd, WM_CHAR, L'i', 0);
+        Check(box.Text() == L"地", "ime native start blocks latin before first preedit");
+        box.OnImeCompose(L"di", 2, {});
+        box.Text(box.Text());
+        Check(box.Composing(), "ime same-value page sync preserves preedit");
+        box.OnImeCommit(L"地");
+        SendMessageW(hwnd, WM_CHAR, L'i', 0);
+        Check(box.Text() == L"地地", "ime native result blocks latin before native end");
+        SendMessageW(hwnd, WM_IME_ENDCOMPOSITION, 0, 0);
+        Check(!box.Composing() && box.Text() == L"地地", "ime native end leaves committed chinese only");
+        SendMessageW(hwnd, WM_CHAR, L'A', 0);
+        Check(box.Text() == L"地地A", "ime native end restores normal english input");
+
+        box.Text(L"");
+        SendMessageW(hwnd, WM_IME_STARTCOMPOSITION, 0, 0);
+        box.OnImeCompose(L"ceshi", 5, {});
+        SendMessageW(hwnd, WM_IME_COMPOSITION, 0, 0);
+        Check(!box.Composing() && box.Text().empty(), "ime zero-flags cancellation clears preedit");
+        SendMessageW(hwnd, WM_CHAR, L'B', 0);
+        Check(box.Text() == L"B", "ime cancelled session restores english input");
+        SendMessageW(hwnd, WM_IME_ENDCOMPOSITION, 0, 0);
+
+        box.Text(L"");
+        SendMessageW(hwnd, WM_IME_STARTCOMPOSITION, 0, 0);
+        window.ClearFocus();
+        box.Focus();
+        SendMessageW(hwnd, WM_CHAR, L'C', 0);
+        Check(box.Text() == L"C", "ime focus loss clears native input guard");
+        window.Close();
+    }
+
+    {
         TestTextBox box;
         box.OnImeCompose(L"ceshi", 5, {});
         Check(box.Text().empty(), "ime compose does not commit latin");
@@ -1242,6 +1294,59 @@ void TestInteraction() {
         Check(sz.h > th.input_height + 1.0f, "floating label grows height");
         box.EnsureEditMenu();
         Check(box.HasContextMenu(), "textbox installs edit menu");
+    }
+
+    {
+
+        // 自定义字体不走 LumaText，命中必须复用完整 DirectWrite 行布局，不能累加单字宽。
+        std::vector<std::wstring> families{L"Times New Roman"};
+        wchar_t font_path[32768]{};
+        const DWORD font_path_size = GetEnvironmentVariableW(L"LUMEN_TEST_FONT", font_path, 32768);
+        if (font_path_size > 0 && font_path_size < 32768) {
+            const auto family = UiText().AddFontFile(font_path);
+            Check(!family.empty(), "optional custom test font loads");
+            if (!family.empty()) families.push_back(family);
+        }
+        Window window(L"custom-font-caret", {560.0f, 140.0f});
+        auto& box = window.Root().Add<TestTextBox>();
+        window.Show();
+        window.LayoutNow();
+        for (const auto& family : families) {
+            box.FontFamily(family);
+            for (auto role : {TextRole::Body, TextRole::Caption}) {
+                box.Role(role);
+                bool caret_matches = true, hit_matches = true;
+                const wchar_t* samples[] = {L"AVATAR 9\u03a625 4/5", L"111111111125 4 / 5",
+                                           L"9D25 4/5", L"9C25 5/4", L"9D25 4 / 5 "};
+                for (const auto* sample : samples) {
+                    box.Text(sample);
+                    FontFamilyScope family_scope(family);
+                    auto* layout = UiText().LineLayout(box.Text(), UiText().Format(role),
+                                                       1.0e4f, Align::Leading);
+                    Check(layout != nullptr, "custom-font DirectWrite layout exists");
+                    if (!layout) continue;
+                    float max_delta = 0.0f;
+                    size_t misses = 0;
+                    for (size_t i = 0; i <= box.Text().size(); ++i) {
+                        float x = 0.0f, y = 0.0f;
+                        DWRITE_HIT_TEST_METRICS pos{};
+                        if (FAILED(layout->HitTestTextPosition(static_cast<UINT32>(i), FALSE, &x, &y, &pos))) {
+                            caret_matches = hit_matches = false;
+                            continue;
+                        }
+                        max_delta = std::max(max_delta, std::fabs(box.CaretX(i) - x));
+                        if (box.HitIndex({14.0f + x, 12.0f}) != i) ++misses;
+                    }
+                    std::printf("[font-layout] family=%ls role=%d text=%ls delta=%.3f misses=%zu\n",
+                                family.c_str(), static_cast<int>(role), sample, max_delta, misses);
+                    caret_matches &= max_delta < 0.05f;
+                    hit_matches &= misses == 0;
+                }
+                Check(caret_matches, "custom-font caret follows full drawn layout");
+                Check(hit_matches, "custom-font click follows full drawn layout");
+            }
+        }
+        window.Close();
     }
 
     {
@@ -2898,6 +3003,24 @@ void TestExtras() {
             Check(window.DrawerActive(), "drawer shown");
         }
         Check(!window.DrawerActive(), "drawer dtor unregisters");
+        {
+            struct AnimatedDrawer : Drawer { using Drawer::OnAnimate; } drawer;
+            auto& combo = drawer.Add<TestComboBox>();
+            combo.Items({L"A", L"B"});
+            window.ShowDrawer(drawer, Edge::Right);
+            Check(combo.AutomationExpand() && window.FlyoutActive(),
+                  "drawer combo dropdown opens");
+            window.CloseDrawer();
+            for (int i = 0; i < 4 && window.DrawerActive(); ++i) drawer.OnAnimate(1.0f);
+            Check(!window.DrawerActive() && !window.FlyoutActive(),
+                  "closing drawer also closes anchored dropdown");
+            Check(combo.AutomationExpandState() == 0,
+                  "closing drawer resets combo expansion state");
+            window.ShowDrawer(drawer, Edge::Right);
+            Check(combo.AutomationExpand() && window.FlyoutActive(),
+                  "drawer combo can reopen after drawer close");
+            window.CloseFlyout();
+        }
     }
     {
         OffscreenRenderer renderer;
@@ -3819,6 +3942,73 @@ void TestWindowContentMeasure() {
     Check(Near(table.AbsoluteBounds().h, table_height) && Near(side.AbsoluteBounds().h, table_height),
           "window measured size lays out complete table rows");
     window.Close();
+}
+
+
+void TestTableTypography() {
+    OffscreenRenderer target;
+    if (!target.Init(360, 140)) { Check(false, "table typography init"); return; }
+    TestTable table;
+    table.AddColumn(L"Value", 300.0f).Alignment(Align::Leading);
+    double value = 31.75;
+    table.RowCount(1).RowHeight(40.0f).CellEditEnabled(true)
+        .BindNumber(0, [&](size_t) { return value; }, [&](size_t, double v) { value = v; })
+        .ColumnPrecision(0, 3)
+        .CellText([](size_t, size_t, std::wstring& out) { out.clear(); });
+    table.Arrange({10, 10, 300, 110});
+    const Theme theme = MakeTheme();
+    auto render = [&] {
+        auto* dc = target.BeginDraw();
+        dc->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+        Painter painter;
+        painter.BeginFrame(dc, &UiText(), 1.0f);
+        DrawControlTree(painter, theme, &table);
+        painter.EndFrame();
+        Check(target.EndDraw(), "table typography draw");
+        std::vector<uint8_t> pixels;
+        Check(target.ReadBack(pixels), "table typography readback");
+        return pixels;
+    };
+    auto ink = [&](const std::vector<uint8_t>& pixels) {
+        int left = 360, right = -1;
+        for (int y = 48; y < 78; ++y) for (int x = 20; x < 300; ++x) {
+            if (pixels[(static_cast<size_t>(y) * 360 + x) * 4] > 180) {
+                left = std::min(left, x); right = std::max(right, x);
+            }
+        }
+        return std::pair{left, right};
+    };
+    const auto leading = render();
+    target.SavePNG(L"lumen_visual_table_leading.png");
+    const auto left = ink(leading);
+    table.ColumnAlignment(0, std::nullopt);
+    const auto automatic = render();
+    const auto right = ink(automatic);
+    Check(left.second >= left.first && right.second >= right.first && right.first > left.first + 100,
+          "numeric column explicit leading overrides trailing default and refreshes cache");
+    table.CellCharacterFont(L"3", L"Consolas").ColumnAlignment(0, Align::Leading);
+    const auto mixed_left = ink(render());
+    table.ColumnAlignment(0, Align::Trailing);
+    const auto mixed_right = ink(render());
+    Check(mixed_right.first > mixed_left.first + 100 && mixed_left.second >= mixed_left.first,
+          "mixed-font numeric column respects alignment");
+    table.CellCharacterFont(L"", L"").ColumnAlignment(0, Align::Leading).Role(TextRole::Title);
+    const auto larger = render();
+    target.SavePNG(L"lumen_visual_table_larger.png");
+    Check(ink(larger).second > left.second, "table role changes rendered glyph size");
+    table.BeginEdit(0, 0);
+    Check(table.Editor() && table.Editor()->Role() == TextRole::Title,
+          "new cell editor follows table content role");
+    table.Role(TextRole::Caption);
+    Check(table.Editor() && table.Editor()->Role() == TextRole::Caption,
+          "active cell editor follows changed table role");
+    if (!table.Editor()) { target.Shutdown(); return; }
+    table.Editor()->Text(L"bad");
+    table.Commit();
+    Check(value == 31.75, "alignment and role retain invalid numeric rejection");
+    table.Cancel();
+    Check(target.SavePNG(L"lumen_visual_table_typography.png"), "save table typography");
+    target.Shutdown();
 }
 
 void TestTablePaintStability() {
@@ -4922,6 +5112,184 @@ PopupWindows FindPopupWindows() {
     return result;
 }
 
+void TestTableHeaderCheck() {
+    TestTable table;
+    std::array<bool, 3> rows{false, true, false};
+    auto state = [&] {
+        const auto count = std::count(rows.begin(), rows.end(), true);
+        return count == 0 ? CheckState::Unchecked : count == 3 ? CheckState::Checked : CheckState::Indeterminate;
+    };
+    table.AddColumn(L"#", 64.0f).Frozen();
+    table.AddColumn(L"On", 72.0f).CheckBox(
+        [&](size_t row) { return rows[row]; }, [&](size_t row, bool value) { rows[row] = value; })
+        .HeaderCheckBox(state, [&](bool value) { rows.fill(value); });
+    table.RowCount(3);
+    table.Arrange({10.0f, 10.0f, 300.0f, 200.0f});
+    const Rect group = table.GroupHeaderContentRect(50.0f, 64.0f);
+    Check(group.x == 74.0f && group.w == 236.0f, "group band content starts after frozen separator");
+    OffscreenRenderer target;
+    Check(target.Init(320, 220), "header checkbox render target");
+    auto render_header = [&](const wchar_t* path) {
+        auto* dc = target.BeginDraw();
+        dc->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+        Painter painter;
+        painter.BeginFrame(dc, &UiText(), 1.0f);
+        DrawControlTree(painter, MakeTheme(), &table);
+        painter.EndFrame();
+        Check(target.EndDraw(), "header checkbox renders");
+        std::vector<uint8_t> pixels, header;
+        Check(target.ReadBack(pixels), "header checkbox readback");
+        for (size_t y = 10; y < 40; ++y)
+            for (size_t x = 100; x < 120; ++x)
+                header.push_back(pixels[(y * 320 + x) * 4]);
+        Check(target.SavePNG(path), "save header checkbox state");
+        return header;
+    };
+    Check(state() == CheckState::Indeterminate, "header reports partial selection");
+    const auto partial = render_header(L"lumen_visual_header_partial.png");
+    table.OnMouseDown({84.0f, 16.0f}, 1);
+    table.OnMouseUp({84.0f, 16.0f}, 1);
+    Check(state() == CheckState::Checked, "partial header click checks every row");
+    const auto all = render_header(L"lumen_visual_header_all.png");
+    table.OnMouseDown({84.0f, 16.0f}, 1);
+    table.OnMouseUp({84.0f, 16.0f}, 1);
+    Check(state() == CheckState::Unchecked, "checked header click clears every row");
+    const auto none = render_header(L"lumen_visual_header_none.png");
+    Check(partial != all && all != none && partial != none, "header three states have distinct pixels");
+    table.OnMouseDown({84.0f, 16.0f}, 1);
+    table.OnMouseUp({84.0f, 100.0f}, 1);
+    Check(state() == CheckState::Unchecked, "header release outside does not toggle rows");
+    table.CellText([](size_t, size_t, std::wstring& out) { out = L"Production"; }).GroupBy(0);
+    render_header(L"lumen_visual_group_divider.png");
+    std::vector<uint8_t> grouped;
+    Check(target.ReadBack(grouped), "group divider readback");
+    const size_t band_y = static_cast<size_t>(10.0f + table.HeaderHeight() + 2.0f);
+    const size_t row_y = static_cast<size_t>(10.0f + table.HeaderHeight() + table.GroupBand() + 2.0f);
+    auto pixel = [&](size_t x, size_t y) { return grouped[(y * 320 + x) * 4]; };
+    Check(pixel(73, band_y) == pixel(74, band_y), "frozen divider does not cross group header");
+    Check(pixel(73, row_y) != pixel(74, row_y), "frozen divider remains between data columns");
+}
+
+void TestStructuredLogView() {
+    std::vector<LogEntry> rows{
+        {L"17:00:00.165", LogLevel::Info, L"worker", L"Order matched id=2913 px=341.50", L"trace=alpha"},
+        {L"17:00:01.421", LogLevel::Error, L"orderbook", L"Retrying upstream call attempt=1151", L"trace=beta"},
+        {L"17:00:03.331", LogLevel::Debug, L"auth", L"Slow query detected duration=240ms", L""},
+        {L"17:00:04.427", LogLevel::Warn, L"api", L"Disk usage 87% on /data", L""},
+    };
+    TestLog log;
+    size_t reads = 0;
+    int following_events = 0;
+    log.Entry([&](size_t index, LogEntry& out) { ++reads; out = rows.at(index); })
+        .ItemCount(rows.size());
+    log.OnFollowingChanged([&](bool) { ++following_events; });
+    log.Arrange({0, 0, 1000, 208});
+    Check(log.VisibleCount() == 4 && log.LevelCount(LogLevel::Error) == 1, "log level counts include source entries");
+    log.Query(L"ALPHA");
+    Check(log.VisibleCount() == 1 && log.DataIndex(0) == 0, "log search matches trace without case sensitivity");
+    log.Query(L"orderbook");
+    Check(log.VisibleCount() == 1 && log.DataIndex(0) == 1, "log search matches source");
+    log.SelectedIndex(0);
+    Check(log.CopySelection(), "log copy selection succeeds");
+    const std::wstring copied = clipboard::Text();
+    Check(copied == L"17:00:01.421 ERROR orderbook Retrying upstream call attempt=1151 trace=beta",
+          "log copies full filtered source entry including trace");
+    Check(log.AutomationItemName(0) ==
+              L"17:00:01.421 ERROR orderbook Retrying upstream call attempt=1151 trace=beta",
+          "log accessibility reads complete filtered entry");
+    log.Query(L"").LevelEnabled(LogLevel::Info, false).LevelEnabled(LogLevel::Debug, false);
+    Check(log.VisibleCount() == 2 && log.DataIndex(0) == 1 && log.DataIndex(1) == 3,
+          "log combines independent level switches");
+    Check(log.SelectedIndex() == 0 && log.LevelCount(LogLevel::Info) == 1,
+          "log preserves selected source and disabled-level counts");
+    log.Query(L"no match");
+    Check(log.VisibleCount() == 0 && log.SelectedIndex() == -1 && !log.OnKey(VK_NEXT),
+          "empty filtered log safely handles keyboard navigation");
+    log.Query(L"").LevelEnabled(LogLevel::Info, true).LevelEnabled(LogLevel::Debug, true);
+    OffscreenRenderer target;
+    Check(target.Init(1000, 208), "structured log render target");
+    auto render = [&](const wchar_t* path) {
+        auto* dc = target.BeginDraw();
+        dc->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+        Painter painter;
+        painter.BeginFrame(dc, &UiText(), 1.0f);
+        log.Prepare(painter, MakeTheme());
+        const size_t before = reads;
+        log.Draw(painter, MakeTheme());
+        Check(reads == before, "log draw never invokes data providers");
+        painter.EndFrame();
+        Check(target.EndDraw() && target.SavePNG(path), "save structured log scene");
+        std::vector<uint8_t> pixels;
+        Check(target.ReadBack(pixels), "structured log pixels");
+        bool monochrome = true;
+        for (size_t i = 0; i + 3 < pixels.size(); i += 4)
+            if (pixels[i] != pixels[i + 1] || pixels[i] != pixels[i + 2]) { monochrome = false; break; }
+        Check(monochrome, "log severity styling stays monochrome");
+    };
+    render(L"lumen_visual_logs.png");
+    log.Arrange({0, 0, 400, 208});
+    render(L"lumen_visual_logs_narrow.png");
+    while (rows.size() < 100) rows.push_back(rows.front());
+    log.ItemCount(rows.size()).Follow(true);
+    Check(log.Following() && log.Offset() > 0, "log follows appended tail");
+    log.OnWheel(4);
+    const float paused_offset = log.Offset();
+    Check(!log.Following() && following_events == 1, "scrolling history pauses follow and notifies toolbar");
+    rows.push_back(rows.front()); reads = 0;
+    log.ItemCount(rows.size());
+    Check(reads == 1 && log.Offset() == paused_offset, "append filters only new entries and preserves paused position");
+    log.Follow(false);
+    log.OnKey(VK_END);
+    Check(log.Following() && log.Offset() > paused_offset, "End resumes explicitly paused follow");
+    log.Follow(false);
+    rows.push_back(rows.front()); log.ItemCount(rows.size());
+    Check(!log.Following(), "append does not override explicit pause");
+    log.Follow(true);
+    Check(log.Following(), "follow button immediately resumes");
+    log.ItemCount(0);
+    Check(log.VisibleCount() == 0 && log.LevelCount(LogLevel::Info) == 0, "clearing logs clears counts");
+}
+
+void TestNestedComboFlyout() {
+    Window window(L"nested combo", {480.0f, 400.0f}, Frame::System);
+    auto& trigger = window.Root().Add<Button>(L"Filters");
+    Flyout filters;
+    filters.FlyoutWidth(300.0f);
+    auto& combo = filters.Add<ComboBox>();
+    combo.Items({L"Any", L"Open", L"Closed"}).SelectedIndex(0);
+    window.Show();
+    window.LayoutNow();
+    window.ShowFlyout(filters, &trigger);
+    int closed = 0;
+    filters.OnClosed([&] { ++closed; });
+    const HWND owner = static_cast<HWND>(window.NativeHandle());
+    const UINT_PTR timer = SetTimer(owner, 0, 3000, [](HWND hwnd, UINT, UINT_PTR id, DWORD) {
+        Check(false, "nested combo watchdog");
+        if (auto popup = FindPopupWindows(); popup.first) PostMessageW(popup.first, WM_KEYDOWN, VK_ESCAPE, 0);
+        KillTimer(hwnd, id);
+    });
+    window.Post([&] {
+        Check(window.FlyoutActive() && window.PopupActive() && closed == 0,
+              "dropdown preserves parent filters");
+        const auto popup = FindPopupWindows();
+        if (!popup.first) { window.ClosePopup(); return; }
+        SendMessageW(popup.first, WM_KEYDOWN, VK_DOWN, 0);
+        SendMessageW(popup.first, WM_KEYDOWN, VK_RETURN, 0);
+    });
+    combo.Focus();
+    window.DispatchKey(VK_SPACE);
+    KillTimer(owner, timer);
+    Check(combo.SelectedIndex() == 1 && !window.PopupActive(), "nested combo commits selected item");
+    Check(window.FlyoutActive() && closed == 0 && combo.WindowOf() == &window,
+          "filters remains bound after selection");
+    window.Post([&] { window.ClosePopup(); });
+    combo.Focus();
+    window.DispatchKey(VK_SPACE);
+    Check(window.FlyoutActive() && closed == 0, "nested combo can reopen and cancel");
+    window.CloseFlyout();
+    Check(closed == 1, "parent filters closes once when requested");
+}
+
 void TestPopupWindow() {
     Window window(L"popup regression", {480.0f, 320.0f}, Frame::System);
     auto& trigger = window.Root().Add<Button>(L"Open");
@@ -5509,6 +5877,91 @@ void TestQuietStates() {
     Check(long_size.h > short_size.h + 20.0f, "wrapped dialog title reserves extra height");
 }
 
+struct ProbeTextBox : TextBox {
+    using TextBox::TextBox;
+    using TextBox::AutomationValue;
+    using TextBox::AutomationIsPassword;
+};
+struct ProbePasswordBox : PasswordBox {
+    using PasswordBox::PasswordBox;
+    using TextBox::AutomationValue;
+    using TextBox::AutomationIsPassword;
+};
+
+void TestReviewFixes() {
+    {
+        ProbePasswordBox pwd(L"review-secret");
+        const std::wstring shown = pwd.AutomationValue();
+        Check(pwd.AutomationIsPassword() && shown.size() == 13 &&
+                  shown.find(L"review-secret") == std::wstring::npos,
+              "password UIA value is masked");
+        ProbeTextBox plain(L"hello");
+        Check(plain.AutomationValue() == L"hello", "text box UIA value stays plain");
+    }
+    {
+        Property<bool> flag{true};
+        Button original;
+        original.BindEnabled(flag);
+        WeakRef<Button> watch(&original);
+        Button moved(std::move(original));
+        Check(watch.Get() == &moved, "weak ref follows control move construction");
+        flag = false;
+        Check(!moved.Enabled() && original.Enabled(), "enabled binding follows move construction");
+        Button target;
+        WeakRef<Button> watch_target(&target);
+        target = std::move(moved);
+        Check(watch.Get() == &target && watch_target.Get() == &target,
+              "weak refs converge after move assignment");
+        flag = true;
+        Check(target.Enabled() && !moved.Enabled(), "rebound binding acts on move target");
+    }
+    {
+        Property<int> base{2};
+        Computed<int> doubled([&] { return base.Get() * 2; }, base);
+        Check(doubled.Get() == 4, "computed evaluates eagerly");
+        base = 5;
+        Check(doubled.Get() == 10, "computed tracks dependency change");
+        Computed<int> moved(std::move(doubled));
+        base = 6;
+        Check(moved.Get() == 12 && doubled.Get() == 12,
+              "computed move shares value and transfers subscriptions");
+    }
+    {
+        Window window(L"mcp-review-fixes", {320.0f, 200.0f});
+        auto& parent = window.Root().Add<Column>();
+        auto& button = parent.Add<Button>(L"Action");
+        int clicks = 0;
+        button.OnClick([&] { ++clicks; });
+        window.Show();
+        window.LayoutNow();
+        button.Focus();
+        button.Visible(false);
+        window.DispatchKey(VK_RETURN);
+        Check(clicks == 0, "hidden focused control ignores keys");
+        button.Visible(true);
+        button.Focus();
+        parent.Enabled(false);
+        window.DispatchKey(VK_RETURN);
+        Check(clicks == 0, "disabled ancestor blocks focused key");
+        parent.Enabled(true);
+        window.DispatchKey(VK_RETURN);
+        Check(clicks == 1, "usable focus still dispatches");
+        window.Close();
+    }
+    {
+        VectorModel<int> model;
+        model.Reset({1, 2, 3});
+        Table table;
+        table.AddColumn(L"V");
+        table.Bind(model);
+        {
+            UpdateScope scope;
+            model.RemoveAt(0);
+        }
+        Check(table.RowCount() == 2, "removal inside update scope keeps table rows fresh");
+    }
+}
+
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);   // 崩溃时也要能看到已通过的断言
     AddVectoredExceptionHandler(1, CrashReport);
@@ -5517,6 +5970,7 @@ int main() {
         return 1;
     }
     TestSignal();
+    TestReviewFixes();
     TestLayout();
     TestTypography();
     TestQuietStates();
@@ -5532,6 +5986,9 @@ int main() {
     TestEscapeShortcut();
     TestHwndFocus();
     TestPopupWindow();
+    TestNestedComboFlyout();
+    TestTableHeaderCheck();
+    TestStructuredLogView();
     TestTypedEditSafety();
     TestHiddenAnimation();
     TestPointer();
@@ -5542,6 +5999,7 @@ int main() {
     TestTableCharacterFont();
     TestLumaTextAlignmentCache();
     TestTablePaintStability();
+    TestTableTypography();
     TestWindowContentMeasure();
     TestHostCycle();
     RenderScene(L"lumen_visual_dark.png");

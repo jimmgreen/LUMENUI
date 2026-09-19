@@ -302,9 +302,6 @@ TextBox& TextBox::MaxLength(size_t n) {
 
 TextBox& TextBox::Mask(std::wstring_view pattern) {
     input_mask_.assign(pattern);
-    if (!input_mask_.empty() && max_length_ == 0) {
-        // 掩码长度即上限；显式 MaxLength 仍可再收紧。
-    }
     Invalidate();
     return *this;
 }

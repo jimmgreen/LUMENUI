@@ -67,11 +67,36 @@ void Control::StealFrom(Control& o) noexcept {
     bind_ref_ = o.bind_ref_;
     o.bind_ref_ = nullptr;
     style_ = std::move(o.style_);
-    weak_head_ = o.weak_head_;
+    // 弱引用挂在对象地址上：移动后把既有观察重挂到新地址；move-assign 时并入目标原有观察。
+    WeakLink* own_weak = weak_head_;
+    WeakLink* adopted = o.weak_head_;
     o.weak_head_ = nullptr;
-    for (WeakLink* link = weak_head_; link; link = link->next) link->host = this;
+    if (adopted) {
+        weak_head_ = adopted;
+        WeakLink* last = nullptr;
+        for (WeakLink* link = weak_head_; link; link = link->next) {
+            link->host = this;
+            if (link->rebind) link->rebind(link->slot, this);
+            last = link;
+        }
+        if (own_weak) {
+            last->next = own_weak;
+            own_weak->prev = last;
+        }
+    }
     bind_visible_ = std::move(o.bind_visible_);
     bind_enabled_ = std::move(o.bind_enabled_);
+    bound_visible_prop_ = o.bound_visible_prop_;
+    o.bound_visible_prop_ = nullptr;
+    bound_enabled_prop_ = o.bound_enabled_prop_;
+    o.bound_enabled_prop_ = nullptr;
+    // 绑定回调捕获的是源控件 this：移动后重挂，属性变化作用于移动目标而非旧存储。
+    if (bound_visible_prop_)
+        bind_visible_ =
+            ScopedConnection(bound_visible_prop_->OnChanged([this](const bool& v) { Visible(v); }));
+    if (bound_enabled_prop_)
+        bind_enabled_ =
+            ScopedConnection(bound_enabled_prop_->OnChanged([this](const bool& v) { Enabled(v); }));
 }
 
 Control::Control(Control&& o) noexcept {
@@ -124,12 +149,14 @@ void Control::DetachWeak(WeakLink* link) noexcept {
 
 Control& Control::BindVisible(Property<bool>& p) {
     Visible(p.Get());
+    bound_visible_prop_ = &p;
     bind_visible_ = ScopedConnection(p.OnChanged([this](const bool& v) { Visible(v); }));
     return *this;
 }
 
 Control& Control::BindEnabled(Property<bool>& p) {
     Enabled(p.Get());
+    bound_enabled_prop_ = &p;
     bind_enabled_ = ScopedConnection(p.OnChanged([this](const bool& v) { Enabled(v); }));
     return *this;
 }

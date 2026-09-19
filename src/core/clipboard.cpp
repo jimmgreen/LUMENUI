@@ -35,7 +35,11 @@ bool Text(std::wstring_view text) {
         }
         static_cast<wchar_t*>(data)[text.size()] = 0;
         GlobalUnlock(mem);
-        SetClipboardData(CF_UNICODETEXT, mem);
+        if (!SetClipboardData(CF_UNICODETEXT, mem)) {
+            GlobalFree(mem);
+            CloseClipboard();
+            return false;
+        }
         CloseClipboard();
         return true;
     }

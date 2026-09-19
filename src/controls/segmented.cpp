@@ -81,7 +81,7 @@ bool Segmented::OnAnimate(float dt) {
 }
 
 float Segmented::ItemWidth(size_t index, const Theme&) {
-    return MeasureText(items_[index], TextRole::Caption).w + kItemPadX * 2.0f;
+    return MeasureText(items_[index], role_).w + kItemPadX * 2.0f;
 }
 
 int Segmented::ItemAt(Point local, const Theme& theme) {
@@ -131,7 +131,7 @@ void Segmented::Draw(Painter& painter, const Theme& theme) {
                                      : ((hovered_ && hover_item_ == static_cast<int>(i))
                                             ? theme.text
                                             : theme.text_secondary);
-        painter.DrawText(items_[i], slot, TextRole::Caption, color, Align::Center);
+        painter.DrawText(items_[i], slot, role_, color, Align::Center);
         x += w;
     }
 }

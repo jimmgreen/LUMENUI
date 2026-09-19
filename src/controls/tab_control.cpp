@@ -121,7 +121,7 @@ void TabControl::IndicatorSlot(size_t index, float& x, float& w) {
     for (size_t i = 0; i < items_.size(); ++i) {
         const float tw = TabWidth(i, kGeometry);
         if (i == index) {
-            const float text_w = MeasureText(items_[i].title, TextRole::BodyStrong).w;
+            const float text_w = std::max(MeasureText(items_[i].title, selected_role_).w, MeasureText(items_[i].title, role_).w);
             const float leading = items_[i].glyph.empty() ? 0.0f : kGlyphSlot;
             const float trailing = (items_[i].closable ? kCloseSlot : 0.0f) + BadgeSlot(items_[i]);
             w = std::min(text_w, std::max(tw - kTabPadX * 2.0f - leading - trailing, 0.0f));
@@ -272,7 +272,7 @@ void TabControl::ShowOnlySelected() {
 float TabControl::TabWidth(size_t index, const Theme& theme) const {
     (void)theme;
     const TabItem& item = items_[index];
-    return MeasureText(item.title, TextRole::BodyStrong).w + kTabPadX * 2.0f +
+    return std::max(MeasureText(item.title, selected_role_).w, MeasureText(item.title, role_).w) + kTabPadX * 2.0f +
            (item.glyph.empty() ? 0.0f : kGlyphSlot) + (item.closable ? kCloseSlot : 0.0f) +
            BadgeSlot(item);
 }
@@ -357,7 +357,7 @@ void TabControl::Draw(Painter& painter, const Theme& theme) {
             painter.FillRoundedRect(tab.Inset(2.0f, 4.0f), 8.0f,
                                     dragging ? theme.fill_selected : theme.fill_hover);
         }
-        const TextRole role = selected ? TextRole::BodyStrong : TextRole::Body;
+        const TextRole role = selected ? selected_role_ : role_;
         float content_x = tab.x + kTabPadX;
         if (!items_[i].glyph.empty()) {
             painter.DrawIcon(items_[i].glyph, {content_x, tab.y, 16.0f, tab.h}, 15.0f,
@@ -410,7 +410,7 @@ void TabControl::Draw(Painter& painter, const Theme& theme) {
     if (StripOverflows()) {
         const Rect more{absolute_.x + view, absolute_.y, kOverflowSlot, kStripHeight};
         if (hover_overflow_) painter.FillRoundedRect(more.Inset(2.0f, 4.0f), 8.0f, theme.fill_hover);
-        painter.DrawText(L"⋯", more, TextRole::BodyStrong, theme.text, Align::Center);
+        painter.DrawText(L"⋯", more, selected_role_, theme.text, Align::Center);
     }
 }
 

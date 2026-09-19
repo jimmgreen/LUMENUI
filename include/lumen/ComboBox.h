@@ -169,6 +169,7 @@ protected:
     // from_typing 时才用 edit_text_ 过滤候选项；点击/键盘打开必须展示全部条目，
     // 否则选中后的 edit_text_ 会把下拉过滤得只剩当前项。
     void OpenPopup(bool from_typing = false);
+    void CloseDropdown();
     void TypeJump(wchar_t ch);
     void ToggleItem(size_t data);
     void FilterSelection();
@@ -194,6 +195,7 @@ protected:
     ptrdiff_t selected_ = -1;
     std::vector<ptrdiff_t> selected_set_;
     bool dropdown_open_ = false;
+    bool native_dropdown_ = false;
     bool editable_ = false;
     bool multi_ = false;
     float glow_t_ = 0.0f;

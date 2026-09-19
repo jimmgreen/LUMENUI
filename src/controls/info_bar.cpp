@@ -61,10 +61,10 @@ Size InfoBar::Measure(Size available, const Theme& theme) {
     const float text_w =
         std::max(80.0f, available.w - kPad * 2.0f - kGlyph - 10.0f - tail_w);
     float text_h = 0.0f;
-    if (!title_.empty()) text_h += MeasureText(title_, TextRole::BodyStrong).h;
+    if (!title_.empty()) text_h += MeasureText(title_, title_role_).h;
     if (!message_.empty()) {
         if (text_h > 0.0f) text_h += 4.0f;
-        text_h += MeasureWrapped(message_, TextRole::Caption, text_w);
+        text_h += MeasureWrapped(message_, message_role_, text_w);
     }
     if (text_h < 20.0f) text_h = 20.0f;
     return {std::max(available.w, 240.0f), std::max(text_h, std::max(tail_h, kGlyph)) + kPad * 2.0f};
@@ -113,13 +113,14 @@ void InfoBar::Draw(Painter& painter, const Theme& theme) {
     const float text_w = std::max(40.0f, text_right - text_x);
     float y = absolute_.y + kPad;
     if (!title_.empty()) {
-        painter.DrawText(title_, {text_x, y, text_w, 20.0f}, TextRole::BodyStrong, theme.text);
-        y += 20.0f;
+        const float title_h = MeasureText(title_, title_role_).h;
+        painter.DrawText(title_, {text_x, y, text_w, title_h}, title_role_, theme.text);
+        y += title_h;
     }
     if (!message_.empty()) {
         if (!title_.empty()) y += 2.0f;
         painter.DrawTextWrapped(message_, {text_x, y, text_w, absolute_.Bottom() - y - kPad},
-                                TextRole::Caption, theme.text_secondary);
+                                message_role_, theme.text_secondary);
     }
 
     if (closable_) {

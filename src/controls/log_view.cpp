@@ -3,26 +3,152 @@
 #include "lumen/Painter.h"
 #include <windows.h>
 #include <algorithm>
+#include <cwctype>
 
 namespace lumen {
 namespace {
 constexpr float kBarHit = 10.0f;
+constexpr std::wstring_view kLevels[]{L"DEBUG", L"INFO", L"WARN", L"ERROR"};
+size_t LevelIndex(LogLevel level) { return std::min(static_cast<size_t>(level), size_t{3}); }
+std::wstring Fold(std::wstring_view text) {
+    std::wstring result(text);
+    for (auto& ch : result) ch = static_cast<wchar_t>(std::towlower(ch));
+    return result;
+}
 } // namespace
 
 void LogView::RelayoutParent() { Control::RelayoutParent(); }
 
-LogView& LogView::ItemCount(size_t count) {
-    item_count_ = count;
-    if (selected_ >= static_cast<ptrdiff_t>(item_count_)) selected_ = -1;
+LogView& LogView::LineText(std::function<void(size_t, std::wstring&)> provider) {
+    line_text_ = std::move(provider);
+    entry_ = {};
+    return Refresh();
+}
+
+LogView& LogView::LineLevel(std::function<LogLevel(size_t)> provider) {
+    line_level_ = std::move(provider);
+    return Refresh();
+}
+
+LogView& LogView::Entry(std::function<void(size_t, LogEntry&)> provider) {
+    entry_ = std::move(provider);
+    return Refresh();
+}
+
+void LogView::ReadEntry(size_t source, LogEntry& out) const {
+    out.timestamp.clear(); out.source.clear(); out.message.clear(); out.trace.clear();
+    out.level = LogLevel::Info;
+    if (entry_) entry_(source, out);
+    else {
+        if (line_text_) line_text_(source, out.message);
+        if (line_level_) out.level = line_level_(source);
+    }
+}
+
+LogView& LogView::Query(std::wstring_view query) {
+    if (query_ == query) return *this;
+    query_ = query;
+    return Refresh();
+}
+
+LogView& LogView::LevelEnabled(LogLevel level, bool enabled) {
+    const size_t index = static_cast<size_t>(level);
+    if (index >= levels_.size() || levels_[index] == enabled) return *this;
+    levels_[index] = enabled;
+    return Refresh();
+}
+
+bool LogView::LevelEnabled(LogLevel level) const noexcept {
+    const size_t index = static_cast<size_t>(level);
+    return index < levels_.size() && levels_[index];
+}
+
+size_t LogView::LevelCount(LogLevel level) const noexcept {
+    const size_t index = static_cast<size_t>(level);
+    return index < level_counts_.size() ? level_counts_[index] : 0;
+}
+
+void LogView::RebuildView(size_t begin) {
+    const size_t selected_source = selected_ >= 0 ? DataIndex(static_cast<size_t>(selected_)) : item_count_;
+    if (begin == 0) { visible_.clear(); level_counts_.fill(0); }
+    const std::wstring query = Fold(query_);
+    LogEntry entry;
+    for (size_t row = begin; row < item_count_; ++row) {
+        if (entry_ || !query.empty()) ReadEntry(row, entry);
+        else entry.level = line_level_ ? line_level_(row) : LogLevel::Info;
+        const size_t level = LevelIndex(entry.level);
+        const auto matches = [&](std::wstring_view text) { return Fold(text).find(query) != std::wstring::npos; };
+        if (!query.empty() && !matches(entry.timestamp) && !matches(kLevels[level]) &&
+            !matches(entry.source) && !matches(entry.message) && !matches(entry.trace)) continue;
+        ++level_counts_[level];
+        if (levels_[level]) visible_.push_back(row);
+    }
+    selected_ = -1;
+    if (selected_source < item_count_) {
+        const auto it = std::lower_bound(visible_.begin(), visible_.end(), selected_source);
+        if (it != visible_.end() && *it == selected_source) selected_ = it - visible_.begin();
+    }
+    hover_row_ = -1;
     ClampScroll();
-    if (follow_ && following_) ScrollToEnd();
+    if (Following()) ScrollToEnd();
     RelayoutParent();
+    Invalidate();
+    view_changed_.Emit();
+}
+
+LogView& LogView::Refresh() { RebuildView(); return *this; }
+
+LogView& LogView::ItemCount(size_t count) {
+    const size_t old_count = item_count_;
+    item_count_ = count;
+    RebuildView(count > old_count ? old_count : 0);
+    return *this;
+}
+
+LogView& LogView::Follow(bool on) {
+    follow_ = on;
+    following_ = on;
+    if (on) ScrollToEnd();
     Invalidate();
     return *this;
 }
 
+void LogView::UpdateFollowing(bool following) {
+    following = follow_ && following;
+    if (following_ == following) return;
+    following_ = following;
+    following_changed_.Emit(following);
+}
+
+void LogView::Arrange(const Rect& absolute) {
+    Control::Arrange(absolute);
+    ClampScroll();
+    if (Following()) ScrollToEnd();
+}
+
+std::wstring LogView::FormatEntry(size_t source) const {
+    LogEntry entry;
+    ReadEntry(source, entry);
+    if (!entry_) return entry.message;
+    std::wstring text = entry.timestamp + L" " + std::wstring(kLevels[LevelIndex(entry.level)]) +
+                        L" " + entry.source + L" " + entry.message;
+    if (!entry.trace.empty()) text += L" " + entry.trace;
+    return text;
+}
+
+std::wstring LogView::AutomationItemName(int index) const {
+    if (index < 0 || static_cast<size_t>(index) >= visible_.size()) return {};
+    return FormatEntry(DataIndex(static_cast<size_t>(index)));
+}
+
+bool LogView::AutomationSelectIndex(int index) {
+    if (!enabled_ || index < -1 || (index >= 0 && static_cast<size_t>(index) >= visible_.size())) return false;
+    SelectedIndex(index);
+    return true;
+}
+
 LogView& LogView::SelectedIndex(ptrdiff_t index) {
-    if (index < -1 || index >= static_cast<ptrdiff_t>(item_count_)) return *this;
+    if (index < -1 || index >= static_cast<ptrdiff_t>(visible_.size())) return *this;
     selected_ = index;
     if (index >= 0) {
         const float row_h = RowHeight();
@@ -39,10 +165,8 @@ LogView& LogView::SelectedIndex(ptrdiff_t index) {
 }
 
 bool LogView::CopySelection() const {
-    if (selected_ < 0 || !line_text_) return false;
-    std::wstring line;
-    line_text_(static_cast<size_t>(selected_), line);
-    return clipboard::Text(line);
+    if (selected_ < 0 || static_cast<size_t>(selected_) >= visible_.size()) return false;
+    return clipboard::Text(FormatEntry(DataIndex(static_cast<size_t>(selected_))));
 }
 
 Size LogView::Measure(Size available, const Theme&) {
@@ -52,7 +176,7 @@ Size LogView::Measure(Size available, const Theme&) {
 }
 
 float LogView::ContentHeight() const noexcept {
-    return static_cast<float>(item_count_) * RowHeight();
+    return static_cast<float>(visible_.size()) * RowHeight();
 }
 
 float LogView::MaxScroll() const {
@@ -73,14 +197,14 @@ void LogView::ScrollToEnd() {
 
 void LogView::PauseFollowIfScrolled() {
     if (!follow_) return;
-    following_ = target_offset_ >= MaxScroll() - 2.0f;
+    UpdateFollowing(target_offset_ >= MaxScroll() - 2.0f);
 }
 
 ptrdiff_t LogView::RowAt(Point local) const {
     if (local.y < 0.0f || local.y >= absolute_.h) return -1;
     const ptrdiff_t row =
         static_cast<ptrdiff_t>((local.y + scroll_offset_) / std::max(RowHeight(), 1.0f));
-    if (row < 0 || row >= static_cast<ptrdiff_t>(item_count_)) return -1;
+    if (row < 0 || row >= static_cast<ptrdiff_t>(visible_.size())) return -1;
     return row;
 }
 
@@ -98,7 +222,7 @@ bool LogView::BeginScrollDrag(Point local) {
     if (!VerticalTrack().Contains(world)) return false;
     const ScrollThumb thumb = Thumb(1.0f);
     dragging_ = true;
-    following_ = false;
+    UpdateFollowing(false);
     if (thumb.visible && thumb.rect.Contains(world)) {
         drag_grab_ = world.y - thumb.rect.y;
     } else {
@@ -138,40 +262,42 @@ bool LogView::OnKey(uint32_t vk) {
         CopySelection();
         return true;
     }
+    if (visible_.empty()) return false;
     const ptrdiff_t page =
         std::max(ptrdiff_t{1}, static_cast<ptrdiff_t>(absolute_.h / RowHeight()));
     switch (vk) {
     case VK_DOWN:
         SelectedIndex(selected_ < 0 ? 0 : std::min(selected_ + 1,
-                                                      static_cast<ptrdiff_t>(item_count_) - 1));
-        following_ = false;
+                                                      static_cast<ptrdiff_t>(visible_.size()) - 1));
+        UpdateFollowing(false);
         return true;
     case VK_UP:
         SelectedIndex(selected_ < 0 ? 0 : std::max(selected_ - 1, ptrdiff_t{0}));
-        following_ = false;
+        UpdateFollowing(false);
         return true;
     case VK_NEXT:
         SelectedIndex(Clamp(selected_ + page, ptrdiff_t{0},
-                               static_cast<ptrdiff_t>(item_count_) - 1));
-        following_ = false;
+                               static_cast<ptrdiff_t>(visible_.size()) - 1));
+        UpdateFollowing(false);
         return true;
     case VK_PRIOR:
         SelectedIndex(Clamp(selected_ - page, ptrdiff_t{0},
-                               static_cast<ptrdiff_t>(item_count_) - 1));
-        following_ = false;
+                               static_cast<ptrdiff_t>(visible_.size()) - 1));
+        UpdateFollowing(false);
         return true;
     case VK_END:
-        if (item_count_) {
-            SelectedIndex(static_cast<ptrdiff_t>(item_count_) - 1);
+        if (visible_.size()) {
+            SelectedIndex(static_cast<ptrdiff_t>(visible_.size()) - 1);
             ScrollToEnd();
-            following_ = follow_;
+            follow_ = true;
+            UpdateFollowing(true);
         }
         return true;
     case VK_HOME:
-        if (item_count_) {
+        if (visible_.size()) {
             SelectedIndex(0);
             target_offset_ = 0.0f;
-            following_ = false;
+            UpdateFollowing(false);
             Animate();
         }
         return true;
@@ -228,40 +354,89 @@ bool LogView::OnWheel(float delta) {
     return true;
 }
 
-void LogView::Draw(Painter& painter, const Theme& theme) {
+LogView::Fields LogView::EntryFields(float y, bool has_trace) const noexcept {
+    Fields fields{};
+    float x = absolute_.x + 10.0f;
+    const float right = std::max(x, absolute_.Right() - kBarHit - 8.0f);
+    const auto take = [&](float width) {
+        const float w = std::max(0.0f, std::min(width, right - x));
+        Rect rect{x, y, w, RowHeight()};
+        x += w + 8.0f;
+        return rect;
+    };
+    if (absolute_.w >= 420.0f) fields.time = take(106.0f);
+    fields.level = take(52.0f);
+    if (absolute_.w >= 600.0f) fields.source = take(94.0f);
+    const float trace_width = has_trace && absolute_.w >= 780.0f ? 142.0f : 0.0f;
+    fields.message = {x, y, std::max(0.0f, right - x - trace_width - (trace_width > 0 ? 12.0f : 0.0f)), RowHeight()};
+    if (trace_width > 0) fields.trace = {right - trace_width, y + 3.0f, trace_width, RowHeight() - 6.0f};
+    return fields;
+}
+
+void LogView::Prepare(Painter& painter, const Theme& theme) {
+    for (Color color : {theme.fill_input, theme.fill_input_hover, theme.fill_selected, theme.fill_hover,
+                        theme.text, theme.text_secondary, theme.text_disabled, theme.stroke_divider,
+                        theme.scrollbar_thumb, theme.scrollbar_thumb_hover, theme.accent}) painter.PrepareColor(color);
     ClampScroll();
+    prepared_first_ = static_cast<size_t>(scroll_offset_ / RowHeight());
+    const size_t available = visible_.size() - std::min(prepared_first_, visible_.size());
+    prepared_.resize(std::min(available, static_cast<size_t>(std::max(0.0f, absolute_.h) / RowHeight()) + 2));
+    for (size_t i = 0; i < prepared_.size(); ++i) {
+        auto& entry = prepared_[i];
+        ReadEntry(DataIndex(prepared_first_ + i), entry);
+        const float y = absolute_.y + static_cast<float>(prepared_first_ + i) * RowHeight() - scroll_offset_;
+        const Color level_color = entry.level == LogLevel::Error ? theme.text :
+                                  entry.level == LogLevel::Debug ? theme.text_disabled : theme.text_secondary;
+        if (!entry_) {
+            painter.PrepareText(entry.message, {absolute_.x + 10, y, std::max(0.0f, absolute_.w - 28), RowHeight()}, TextRole::Mono, level_color);
+            continue;
+        }
+        const Fields fields = EntryFields(y, !entry.trace.empty());
+        if (!fields.time.IsEmpty()) painter.PrepareText(entry.timestamp, fields.time, TextRole::Mono, theme.text_disabled);
+        painter.PrepareText(kLevels[LevelIndex(entry.level)], fields.level, TextRole::Mono, level_color);
+        if (!fields.source.IsEmpty()) painter.PrepareText(entry.source, fields.source, TextRole::Mono, theme.text_secondary);
+        painter.PrepareText(entry.message, fields.message, TextRole::Mono, theme.text);
+        if (!fields.trace.IsEmpty()) painter.PrepareText(entry.trace, fields.trace.Inset(8.0f, 0), TextRole::Mono, theme.text_secondary);
+    }
+    if (visible_.empty()) painter.PrepareText(empty_text_, absolute_.Inset(10.0f, 0), TextRole::Body, theme.text_secondary);
+}
+
+void LogView::Draw(Painter& painter, const Theme& theme) {
     painter.PushClip(absolute_);
     painter.FillRoundedRect(absolute_, theme.radius_control, theme.fill_input);
-    const float row_h = RowHeight();
-    const ptrdiff_t first = static_cast<ptrdiff_t>(scroll_offset_ / row_h);
-    const ptrdiff_t visible = static_cast<ptrdiff_t>(absolute_.h / row_h) + 2;
-    for (ptrdiff_t row = std::max(first, ptrdiff_t{0});
-         row < first + visible && row < static_cast<ptrdiff_t>(item_count_); ++row) {
-        const float y = absolute_.y + static_cast<float>(row) * row_h - scroll_offset_;
-        const Rect slot{absolute_.x + 4.0f, y, absolute_.w - 8.0f, row_h};
-        if (row == selected_) {
-            painter.FillRoundedRect(slot, 4.0f, theme.fill_selected);
-        } else if (row == hover_row_ && enabled_) {
-            painter.FillRoundedRect(slot, 4.0f, theme.fill_hover);
+    for (size_t i = 0; i < prepared_.size(); ++i) {
+        const ptrdiff_t row = static_cast<ptrdiff_t>(prepared_first_ + i);
+        const auto& entry = prepared_[i];
+        const float y = absolute_.y + static_cast<float>(row) * RowHeight() - scroll_offset_;
+        const Rect slot{absolute_.x + 4.0f, y, std::max(0.0f, absolute_.w - 8.0f), RowHeight()};
+        if (row == selected_) painter.FillRoundedRect(slot, 4.0f, theme.fill_selected);
+        else if (row == hover_row_ && enabled_) painter.FillRoundedRect(slot, 4.0f, theme.fill_hover);
+        else if (entry_ && entry.level == LogLevel::Error) painter.FillRect(slot, theme.fill_input_hover);
+        if (entry_ && (entry.level == LogLevel::Error || entry.level == LogLevel::Warn))
+            painter.FillRect({slot.x, slot.y + 5.0f, 2.0f, slot.h - 10.0f},
+                             entry.level == LogLevel::Error ? theme.text : theme.text_secondary);
+        const Color level_color = entry.level == LogLevel::Error ? theme.text :
+                                  entry.level == LogLevel::Debug ? theme.text_disabled : theme.text_secondary;
+        if (!entry_) {
+            painter.DrawText(entry.message, {slot.x + 6.0f, slot.y, std::max(0.0f, slot.w - 20.0f), slot.h}, TextRole::Mono, level_color);
+        } else {
+            const Fields fields = EntryFields(y, !entry.trace.empty());
+            if (!fields.time.IsEmpty()) painter.DrawText(entry.timestamp, fields.time, TextRole::Mono, theme.text_disabled);
+            painter.DrawText(kLevels[LevelIndex(entry.level)], fields.level, TextRole::Mono, level_color);
+            if (!fields.source.IsEmpty()) painter.DrawText(entry.source, fields.source, TextRole::Mono, theme.text_secondary);
+            painter.DrawText(entry.message, fields.message, TextRole::Mono, theme.text);
+            if (!fields.trace.IsEmpty()) {
+                painter.StrokeRoundedRect(fields.trace, fields.trace.h * 0.5f, theme.stroke_divider);
+                painter.DrawText(entry.trace, fields.trace.Inset(8.0f, 0), TextRole::Mono, theme.text_secondary);
+            }
         }
-        draw_text_.clear();
-        if (line_text_) line_text_(static_cast<size_t>(row), draw_text_);
-        LogLevel level = LogLevel::Info;
-        if (line_level_) level = line_level_(static_cast<size_t>(row));
-        Color color = theme.text_secondary;
-        if (level == LogLevel::Error) color = theme.text;
-        else if (level == LogLevel::Warn) color = theme.text_secondary;
-        else if (level == LogLevel::Debug) color = theme.text_disabled;
-        else color = theme.text_secondary;
-        if (level == LogLevel::Error) color = theme.text;
-        painter.DrawText(draw_text_, {slot.x + 6.0f, slot.y, slot.w - 8.0f, slot.h}, TextRole::Mono,
-                         color);
+        if (row == selected_ && FocusVisible()) PaintFocusRing(painter, theme, slot.Inset(1.0f, 1.0f), 4.0f);
     }
+    if (visible_.empty()) painter.DrawText(empty_text_, absolute_.Inset(10.0f, 0), TextRole::Body, theme.text_secondary);
     painter.PopClip();
     const bool hot = hovered_ || dragging_;
-    const Color thumb = hot ? theme.scrollbar_thumb_hover : theme.scrollbar_thumb;
     painter.DrawScrollThumb(Thumb(std::max(expand_progress_, MaxScroll() > 0.5f ? 0.45f : 0.0f)),
-                            thumb);
+                            hot ? theme.scrollbar_thumb_hover : theme.scrollbar_thumb);
 }
 
 } // namespace lumen

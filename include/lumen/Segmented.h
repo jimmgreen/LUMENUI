@@ -14,6 +14,9 @@ namespace lumen {
 
 class Segmented : public ControlOf<Segmented> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    Segmented& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     int AddItem(std::wstring_view text);
     ptrdiff_t SelectedIndex() const noexcept { return selected_; }
     Segmented& SelectedIndex(ptrdiff_t index);
@@ -27,6 +30,7 @@ public:
     Segmented& BindSelectedIndex(Property<int>& p);
 
 protected:
+    TextRole role_ = TextRole::Caption;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;

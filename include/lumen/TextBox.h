@@ -115,7 +115,8 @@ protected:
     std::wstring AutomationName() const override {
         return accessible_name_.empty() ? placeholder_ : accessible_name_;
     }
-    std::wstring AutomationValue() const override { return text_; }
+    // UIA Value 不回明文：密码态返回掩码（IsPassword 仍如实上报，读屏提示但不泄露）。
+    std::wstring AutomationValue() const override { return password_ ? VisibleText() : text_; }
     bool AutomationSetValue(std::wstring_view value) override {
         if (!enabled_ || read_only_) return false;
         Text(value);

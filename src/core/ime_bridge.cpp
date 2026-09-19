@@ -13,6 +13,10 @@ Control* WindowImpl::ImeTarget() const {
     return popup ? popup : focused_;
 }
 
+bool WindowImpl::IsImeComposing(const Control* target) const {
+    return target && (target->ImeComposing() || native_ime_target_.Get() == target);
+}
+
 bool WindowImpl::ImeClientCaret(POINT* caret_px, int* line_h_px, RECT* doc_px) const {
     Point dip{};
     float height_dip = 0.0f;
@@ -42,6 +46,13 @@ void WindowImpl::HandleImeComposition(LPARAM lparam) {
     WeakRef<Control> target(ImeTarget());
     if (!hwnd_ || !target) return;
     auto port = port_;
+    // lParam == 0 是取消组字；即使没有 HIMC 也必须去掉行内临时串。
+    if (lparam == 0) {
+        native_ime_target_.Reset();
+        target->OnImeEnd();
+        if (port->target.load(std::memory_order_acquire)) SyncImeCaret();
+        return;
+    }
     HIMC himc = ImmGetContext(hwnd_);
     if (!himc) return;
 

@@ -185,6 +185,10 @@ int main() {
     LUMEN_CHAIN(lumen::StatusBar);
     LUMEN_CHAIN(lumen::TitleBar);
     LUMEN_CHAIN(lumen::LogView);
+    lumen::LogView log;
+    static_assert(std::is_same_v<decltype(log.Entry([](size_t, lumen::LogEntry&) {}).Query(L"error")
+        .LevelEnabled(lumen::LogLevel::Debug, false).Follow(true).EmptyText(L"No entries")
+        .OnViewChanged([] {}).OnFollowingChanged([](bool) {})), lumen::LogView&>);
     LUMEN_CHAIN(lumen::Dialog);
     LUMEN_CHAIN(lumen::Flyout);
     LUMEN_CHAIN(lumen::TeachingTip);
@@ -437,6 +441,8 @@ int main() {
         // R18：浮点/整数成员默认文本渲染，进度条必须显式 .Progress(get)。
         Check(table.ColumnKind(1) == lumen::CellKind::Text, "double column renders as text");
         Check(table.ColumnKind(2) == lumen::CellKind::Text, "int column renders as text");
+        table.Role(lumen::TextRole::Body).HeaderRole(lumen::TextRole::BodyStrong)
+            .ColumnAlignment(1, lumen::Align::Leading);
         table.ColumnPrecision(1, 1);
         table.SortBy(1, 1);   // 按比例升序：10, 20, 30（数值序，不是字典序）
         Check(table.DataRowAt(0) == 1 && table.DataRowAt(1) == 2 && table.DataRowAt(2) == 0,

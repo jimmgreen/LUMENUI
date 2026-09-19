@@ -12,6 +12,12 @@ namespace lumen {
 
 class SettingsCard : public PanelOf<SettingsCard> {
 public:
+    TextRole DescriptionRole() const noexcept { return description_role_; }
+    SettingsCard& DescriptionRole(TextRole value) { description_role_ = value; RelayoutParent(); return *this; }
+
+    TextRole TitleRole() const noexcept { return title_role_; }
+    SettingsCard& TitleRole(TextRole value) { title_role_ = value; RelayoutParent(); return *this; }
+
     SettingsCard() = default;   // 聚光需显式 Spotlight(true)（追光只属于底部聚光卡）
 
     SettingsCard& Title(std::wstring_view value) { title_ = value; RelayoutParent(); return *this; }
@@ -32,6 +38,8 @@ public:
     Connection BindClick(std::function<void()> handler) { return click_.Connect(std::move(handler)); }
 
 protected:
+    TextRole description_role_ = TextRole::Caption;
+    TextRole title_role_ = TextRole::BodyStrong;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     AutomationControlType AutomationType() const noexcept override {

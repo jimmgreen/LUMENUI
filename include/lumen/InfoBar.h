@@ -14,6 +14,12 @@ class Button;
 
 class InfoBar : public PanelOf<InfoBar> {
 public:
+    TextRole MessageRole() const noexcept { return message_role_; }
+    InfoBar& MessageRole(TextRole value) { message_role_ = value; RelayoutParent(); return *this; }
+
+    TextRole TitleRole() const noexcept { return title_role_; }
+    InfoBar& TitleRole(TextRole value) { title_role_ = value; RelayoutParent(); return *this; }
+
     enum class InfoTone { Informational, Success, Warning, Critical };
 
     InfoBar() = default;
@@ -36,6 +42,8 @@ public:
     InfoBar& Action(std::wstring_view label, std::function<void()> on_click);
 
 protected:
+    TextRole message_role_ = TextRole::Caption;
+    TextRole title_role_ = TextRole::BodyStrong;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     AutomationControlType AutomationType() const noexcept override {

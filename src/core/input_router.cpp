@@ -23,6 +23,7 @@ void WindowImpl::SetFocusControl(Control* control) {
     if (focused_ == control) return;
     auto port = port_;
     WeakRef<Control> next(control), previous(focused_);
+    native_ime_target_.Reset();
     focused_ = nullptr;
     if (previous) {
         previous->focused_ = false;
@@ -104,6 +105,13 @@ Control* WindowImpl::HitTree(Control* control, Point p, float slop) const {
         }
     }
     return control->HitTransparent() ? nullptr : control;
+}
+
+bool WindowImpl::IsFocusChainUsable(const Control* control) const noexcept {
+    for (const Control* node = control; node; node = node->parent_) {
+        if (!node->visible_ || !node->enabled_) return false;
+    }
+    return true;
 }
 
 Control* WindowImpl::HitTest(Point p) {
@@ -346,8 +354,9 @@ void WindowImpl::OnMouseButton(int px, int py, uint32_t buttons, bool down, uint
 
 bool WindowImpl::OnKeyDown(uint32_t vk) {
     keyboard_focus_ = true;
-    if (focused_ && focused_->ImeComposing()) {
+    if (IsImeComposing(focused_)) {
         if (vk == VK_ESCAPE || vk == VK_RETURN || vk == VK_TAB) {
+            if (vk == VK_ESCAPE) native_ime_target_.Reset();
             if (HIMC context = ImmGetContext(hwnd_)) {
                 ImmNotifyIME(context, NI_COMPOSITIONSTR, vk == VK_ESCAPE ? CPS_CANCEL : CPS_COMPLETE, 0);
                 ImmReleaseContext(hwnd_, context);
@@ -376,7 +385,8 @@ bool WindowImpl::OnKeyDown(uint32_t vk) {
         active_dialog_->OnKey(vk);
         return true;
     }
-    if (focused_ && focused_->OnKey(vk)) return true;
+    // 焦点链失效（控件隐藏或祖先禁用）时跳过焦点派发，继续走对话框/快捷键/Tab。
+    if (focused_ && IsFocusChainUsable(focused_) && focused_->OnKey(vk)) return true;
     if (vk == VK_RETURN && active_dialog_) {
         active_dialog_->OnKey(vk);
         return true;

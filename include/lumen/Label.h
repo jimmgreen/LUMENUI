@@ -27,6 +27,7 @@ public:
         AssertUiThread();
         return text_;
     }
+    TextRole Role() const noexcept { return role_; }
     Label& Role(TextRole role) { role_ = role; RelayoutParent(); return *this; }
     Label& Secondary(bool value) { secondary_ = value; Invalidate(); return *this; }
     Label& Foreground(Color value) { foreground_ = value; Invalidate(); return *this; }

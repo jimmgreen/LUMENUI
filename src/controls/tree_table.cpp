@@ -123,7 +123,11 @@ TreeTable& TreeTable::SetFlatData(const std::vector<size_t>& parents) {
     child_count_ = [this](size_t id) {
         return id < flat_children_.size() ? flat_children_[id].size() : size_t{0};
     };
-    child_at_ = [this](size_t id, size_t index) { return flat_children_[id][index]; };
+    child_at_ = [this](size_t id, size_t index) {
+        return id < flat_children_.size() && index < flat_children_[id].size()
+                   ? flat_children_[id][index]
+                   : size_t{0};
+    };
     root_count_ = root_ids_.size();
     RebuildVisible();
     return *this;

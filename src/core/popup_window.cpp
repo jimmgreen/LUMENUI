@@ -172,6 +172,7 @@ void PopupWindow::Run(Control& content, const Control* anchor, float width) {
     impl_->HideTooltip(true);
     SyncPosition();
     if (dismissed_ || !CreatePopup()) return;
+    if (content.Focusable()) SetFocus(&content);
     Renderer::FlyoutEnter();
     entered_ = true;
     // 不长期占用 capture：线程消息路由负责外点收起，主窗非客户区仍能拖动。
@@ -290,6 +291,7 @@ void PopupWindow::SetFocus(Control* hit) {
     if (focus_.Get() == hit) return;
     WeakRef<Control> next(hit);
     WeakRef<Control> old(focus_.Get());
+    if (impl_ && impl_->native_ime_target_.Get() == old.Get()) impl_->native_ime_target_.Reset();
     focus_.Reset();
     if (old) {
         old->focused_ = false;
@@ -387,7 +389,8 @@ void PopupWindow::RoutePointer(POINT screen_px, bool down, bool up, uint32_t but
 bool PopupWindow::RouteMessage(HWND source, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (dismissed_ || !hwnd_) return false;
     if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
-        if (focus_ && focus_->ImeComposing() && (wparam == VK_ESCAPE || wparam == VK_RETURN || wparam == VK_TAB)) {
+        if (focus_ && impl_ && impl_->IsImeComposing(focus_.Get()) && (wparam == VK_ESCAPE || wparam == VK_RETURN || wparam == VK_TAB)) {
+            if (wparam == VK_ESCAPE) impl_->native_ime_target_.Reset();
             if (HIMC context = ImmGetContext(owner_)) {
                 ImmNotifyIME(context, NI_COMPOSITIONSTR, wparam == VK_ESCAPE ? CPS_CANCEL : CPS_COMPLETE, 0);
                 ImmReleaseContext(owner_, context);
@@ -407,7 +410,7 @@ bool PopupWindow::RouteMessage(HWND source, UINT msg, WPARAM wparam, LPARAM lpar
         return true;
     }
     if (msg == WM_CHAR) {
-        if (focus_ && !focus_->ImeComposing()) focus_->OnChar(static_cast<wchar_t>(wparam));
+        if (focus_ && impl_ && !impl_->IsImeComposing(focus_.Get())) focus_->OnChar(static_cast<wchar_t>(wparam));
         return true;
     }
     if (msg == WM_KEYUP || msg == WM_SYSKEYUP) return true;

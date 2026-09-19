@@ -103,7 +103,10 @@ int lumen_main(std::span<const std::wstring_view> args) {
     BuildInput(add_page(L"input"), window);
     BuildSelection(add_page(L"selection"), window);
     BuildLayout(add_page(L"layout"), window);
-    BuildCollections(add_page(L"collections"), window);
+    if (start_page == L"logview") {
+        BuildLogViewDemo(add_page(L"collections"), window);
+        start_page = L"collections";
+    } else BuildCollections(add_page(L"collections"), window);
     BuildNavigation(add_page(L"navigation"), window);
     BuildOverlays(add_page(L"overlays"), window);
     BuildStatus(add_page(L"status"), window);

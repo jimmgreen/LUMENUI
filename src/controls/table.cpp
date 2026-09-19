@@ -423,6 +423,15 @@ Table& Table::ColumnKind(int col, CellKind kind) {
     return *this;
 }
 
+Table& Table::BindHeaderCheckBox(int col, std::function<CheckState()> get,
+                                std::function<void(bool)> set) {
+    if (col < 0 || static_cast<size_t>(col) >= columns_.size()) return *this;
+    columns_[col].header_check_get = std::move(get);
+    columns_[col].header_check_set = std::move(set);
+    Invalidate();
+    return *this;
+}
+
 Table& Table::BindCheckBox(int col, std::function<bool(size_t)> get,
                            std::function<void(size_t, bool)> set) {
     if (draw_cache_) draw_cache_->footer_dirty = draw_cache_->footer_full = true;
@@ -587,6 +596,23 @@ bool Table::StrictParseNumber(std::wstring_view text, double& out) {
     if (!std::isfinite(v)) return false;
     out = v;
     return true;
+}
+
+Table& Table::Role(TextRole value) {
+    role_ = value;
+    for (auto& slot : slots_) {
+        if (auto* box = dynamic_cast<TextBox*>(slot.control)) box->Role(value);
+    }
+    if (cell_editor_) cell_editor_->Role(value);
+    RelayoutParent();
+    return *this;
+}
+
+Table& Table::ColumnAlignment(int col, std::optional<Align> value) {
+    if (col < 0 || col >= static_cast<int>(columns_.size())) return *this;
+    columns_[static_cast<size_t>(col)].alignment = value;
+    Invalidate();
+    return *this;
 }
 
 Table& Table::ColumnPrecision(int col, int decimals) {
@@ -866,6 +892,7 @@ void Table::BeginCellEdit(ptrdiff_t row, int col) {
             MoveEditableCell((GetKeyState(VK_SHIFT) & 0x8000) != 0);
         };
     }
+    cell_editor_->Role(role_);
     cell_editor_->numeric = columns_[static_cast<size_t>(col)].numeric;
     cell_editor_->number_valid = columns_[static_cast<size_t>(col)].num_valid;
     edit_row_ = row;
@@ -1281,6 +1308,10 @@ float Table::ColumnPixelWidth(int col, float viewport_width) const {
     float ws[kMaxColumns]{};
     ColumnMetrics(std::max(viewport_width, 1.0f), xs, ws, columns_.size());
     return ws[col];
+}
+
+float Table::ColumnPixelWidth(int col) const {
+    return ColumnPixelWidth(col, absolute_.w);
 }
 
 float Table::ColumnsPixelWidth(float viewport_width) const {
@@ -1780,6 +1811,7 @@ void Table::EnsurePool() {
                     const size_t c = slots_[slot_i].col;
                     if (row < 0 || c >= columns_.size() || !columns_[c].cb_set) return;
                     columns_[c].cb_set(DataRowAt(static_cast<size_t>(row)), box->Checked());
+                    Invalidate();
                 });
                 break;
             }
@@ -1798,6 +1830,7 @@ void Table::EnsurePool() {
             }
             case CellKind::TextBox: {
                 auto& tb = Add<TableTextBox>();
+                tb.Role(role_);
                 ctl = &tb;
                 tb.OnTextChanged([this, slot_i](std::wstring_view) {
                     if (slot_i >= slots_.size()) return;
@@ -1956,6 +1989,16 @@ void Table::SyncSlots() {
 bool Table::OnKey(uint32_t vk) {
     const bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    if (ctrl && vk == VK_SPACE && active_col_ >= 0 && static_cast<size_t>(active_col_) < columns_.size()) {
+        const auto get = columns_[active_col_].header_check_get;
+        const auto set = columns_[active_col_].header_check_set;
+        if (get && set) {
+            set(get() != CheckState::Checked);
+            SyncSlots();
+            Invalidate();
+            return true;
+        }
+    }
     if (ctrl && (vk == 'C' || vk == 'c')) {
         CopySelection();
         return true;
@@ -2204,7 +2247,7 @@ std::wstring Table::FooterText(size_t col) const {
 }
 
 uint64_t Table::ColumnFingerprint() const noexcept {
-    uint64_t cols = columns_.size() ^ (visual_.size() << 8) ^ (static_cast<uint64_t>(group_col_) << 16);
+    uint64_t cols = (static_cast<uint64_t>(role_) << 32) ^ (static_cast<uint64_t>(header_role_) << 40) ^ columns_.size() ^ (visual_.size() << 8) ^ (static_cast<uint64_t>(group_col_) << 16);
     cols ^= footer_ ? 0x1000000ULL : 0;
     for (size_t i = 0; i < columns_.size(); ++i) {
         const ColumnDef& col = columns_[i];
@@ -2217,6 +2260,7 @@ uint64_t Table::ColumnFingerprint() const noexcept {
             cols = (cols << 5) | (cols >> 59);
         }
         cols ^= col.frozen ? 0x9e3779b97f4a7c15ULL : 0;
+        cols ^= static_cast<uint64_t>(col.alignment ? static_cast<int>(*col.alignment) + 1 : 0) << 24;
         cols ^= col.visible ? 0x85ebca77c2b2ae63ULL : 0;
         cols ^= static_cast<uint64_t>(static_cast<int>(col.kind));
         cols ^= static_cast<uint64_t>(static_cast<int>(col.aggregate)) << 8;
@@ -2384,10 +2428,17 @@ void Table::OnMouseMove(Point local, uint32_t buttons) {
     }
 }
 
-void Table::OnMouseUp(Point, uint32_t) {
+void Table::OnMouseUp(Point local, uint32_t) {
     UpdateScope update;
     if (reorder_dragging_ && header_press_col_ >= 0 && drop_col_ >= 0) {
         MoveColumn(header_press_col_, drop_col_);
+    } else if (header_press_col_ >= 0 && !reorder_dragging_ &&
+               local.y >= 0 && local.y < HeaderHeight() && ColumnAt(local.x) == header_press_col_ &&
+               columns_[header_press_col_].header_check_get && columns_[header_press_col_].header_check_set) {
+        const auto get = columns_[header_press_col_].header_check_get;
+        const auto set = columns_[header_press_col_].header_check_set;
+        set(get() != CheckState::Checked);
+        SyncSlots();
     } else if (header_press_col_ >= 0 && !reorder_dragging_ && Sortable(header_press_col_)) {
         const int clicked = header_press_col_;
         const bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -2497,7 +2548,9 @@ void Table::Prepare(Painter& painter, const Theme& theme) {
                         theme.control_stroke}) painter.PrepareColor(color);
     const size_t n = columns_.size();
     float xs[kMaxColumns]{}, ws[kMaxColumns]{};
-    ColumnMetrics(absolute_.w, xs, ws, n);
+    float frozen_width = 0.0f;
+    ColumnMetrics(absolute_.w, xs, ws, n, &frozen_width, nullptr);
+    frozen_width = std::min(frozen_width, absolute_.w);
     const float row_h = std::max(RowHeight(), 1.0f);
     const float body_y = absolute_.y + std::min(HeaderHeight(), absolute_.h);
     const float header_h = std::min(HeaderHeight(), absolute_.h);
@@ -2507,7 +2560,7 @@ void Table::Prepare(Painter& painter, const Theme& theme) {
         for (size_t k = 0; k < sort_keys_.size(); ++k) if (sort_keys_[k].col == static_cast<int>(c)) rank = static_cast<int>(k);
         painter.PrepareText(columns_[c].title,
             {absolute_.x + xs[c] + kCellPadX, absolute_.y, ws[c] - kCellPadX * 2 - kPinSlot, header_h},
-            TextRole::CaptionStrong, theme.text);
+            header_role_, theme.text);
         if (rank >= 0 && sort_keys_.size() > 1) {
             const wchar_t text[] = {static_cast<wchar_t>(L'1' + rank), 0};
             painter.PrepareText(text, {absolute_.x + xs[c] + ws[c] - kPinSlot - 22,
@@ -2537,27 +2590,36 @@ void Table::Prepare(Painter& painter, const Theme& theme) {
             flow_active_ = flow_active_ || cell.flow;
             const Rect rect{absolute_.x + xs[c] + kCellPadX, body_y + top - scroll_offset_, ws[c] - kCellPadX * 2, row_h};
             if (cell_font_chars_.empty() || cell_font_family_.empty()) {
-                cell.width = painter.AdvanceText(cell.text, TextRole::Caption);
-                painter.PrepareText(cell.text, rect, TextRole::Caption, theme.text,
-                                    (column.numeric || column.numeric_text) ? Align::Trailing : Align::Leading);
+                cell.width = painter.AdvanceText(cell.text, role_);
+                painter.PrepareText(cell.text, rect, role_, theme.text,
+                                    column.alignment.value_or((column.numeric || column.numeric_text) ? Align::Trailing : Align::Leading));
             } else {
                 for (size_t begin = 0; begin < cell.text.size();) {
                     const bool custom = cell_font_chars_.find(cell.text[begin]) != std::wstring::npos;
                     size_t end = begin + 1;
                     while (end < cell.text.size() && (cell_font_chars_.find(cell.text[end]) != std::wstring::npos) == custom) ++end;
                     const std::wstring_view segment(cell.text.data() + begin, end - begin);
-                    const auto measure = [&] {
-                        const float width = painter.AdvanceText(segment, TextRole::Caption);
-                        if (cell.width < rect.w) painter.PrepareText(segment,
-                            {rect.x + cell.width, rect.y, rect.w - cell.width, rect.h}, TextRole::Caption, theme.text);
-                        return width;
-                    };
                     float advance;
-                    if (custom) { FontFamilyScope font(cell_font_family_); advance = measure(); }
-                    else advance = measure();
+                    if (custom) { FontFamilyScope font(cell_font_family_); advance = painter.AdvanceText(segment, role_); }
+                    else advance = painter.AdvanceText(segment, role_);
                     cell.segments.push_back({begin, end - begin, advance, custom});
                     cell.width += advance;
                     begin = end;
+                }
+                // 混合字体先合计宽度，再统一对齐；预热与实际绘制必须使用相同原点。
+                const Align align = column.alignment.value_or((column.numeric || column.numeric_text)
+                    ? Align::Trailing : Align::Leading);
+                const float spare = std::max(0.0f, rect.w - cell.width);
+                float offset = align == Align::Trailing ? spare : align == Align::Center ? spare * .5f : 0.0f;
+                for (const auto& part : cell.segments) {
+                    if (offset >= rect.w) break;
+                    const std::wstring_view segment(cell.text.data() + part.begin, part.length);
+                    const Rect bounds{rect.x + offset, rect.y, rect.w - offset, rect.h};
+                    if (part.custom) {
+                        FontFamilyScope font(cell_font_family_);
+                        painter.PrepareText(segment, bounds, role_, theme.text);
+                    } else painter.PrepareText(segment, bounds, role_, theme.text);
+                    offset += part.advance;
                 }
             }
         }
@@ -2577,15 +2639,21 @@ void Table::Prepare(Painter& painter, const Theme& theme) {
             if (y <= body_y + .5f) sticky = &group;
             else {
                 if (sticky && next_header == body_y + BodyHeight()) next_header = y;
-                if (y <= body_y + BodyHeight()) painter.PrepareText(group.key,
-                    {absolute_.x + 26, y, absolute_.w - 40, GroupBand()}, TextRole::CaptionStrong, theme.text);
+                const Rect content = GroupHeaderContentRect(y, frozen_width);
+                if (y <= body_y + BodyHeight() && content.w > 0.5f) painter.PrepareText(group.key,
+                    {content.x + 26.0f, y, std::max(0.0f, content.w - 40.0f), GroupBand()},
+                    header_role_, theme.text);
             }
             top += GroupBand();
             if (group.expanded) { range(group.start, group.count, top); top += static_cast<float>(group.count) * row_h; }
         }
-        if (sticky) painter.PrepareText(sticky->key,
-            {absolute_.x + 26, std::min(body_y, next_header - GroupBand()), absolute_.w - 40, GroupBand()},
-            TextRole::CaptionStrong, theme.text);
+        if (sticky) {
+            const float y = std::min(body_y, next_header - GroupBand());
+            const Rect content = GroupHeaderContentRect(y, frozen_width);
+            if (content.w > 0.5f) painter.PrepareText(sticky->key,
+                {content.x + 26.0f, y, std::max(0.0f, content.w - 40.0f), GroupBand()},
+                header_role_, theme.text);
+        }
     }
     const bool refresh_footer = cache.footer_dirty || cache.footers.size() != n;
     cache.footers.resize(n);
@@ -2593,7 +2661,7 @@ void Table::Prepare(Painter& painter, const Theme& theme) {
         if (refresh_footer) cache.footers[c] = footer_ ? FooterText(c) : std::wstring{};
         const Rect footer = FooterRect();
         if (footer_ && ws[c] > kCellPadX * 2) painter.PrepareText(cache.footers[c],
-            {footer.x + xs[c] + kCellPadX, footer.y, ws[c] - kCellPadX * 2, footer.h}, TextRole::Caption, theme.text_secondary);
+            {footer.x + xs[c] + kCellPadX, footer.y, ws[c] - kCellPadX * 2, footer.h}, role_, theme.text_secondary);
     }
     cache.footer_dirty = cache.footer_full = false;
     cache.footer_begin = cache.footer_end = 0;
@@ -2631,10 +2699,20 @@ void Table::Draw(Painter& painter, const Theme& theme) {
             break;
         }
         if (ink) {
-            if (cell_w > 0.5f && !columns_[c].title.empty()) {
+            if (columns_[c].header_check_get && cell_w >= 18.0f) {
+                const CheckState state = columns_[c].header_check_get();
+                const Rect box{absolute_.x + xs[c] + (ws[c] - 18.0f) * 0.5f, header.y + (header.h - 18.0f) * 0.5f, 18.0f, 18.0f};
+                const bool on = state != CheckState::Unchecked;
+                painter.FillRoundedRect(box, 3.0f, on ? theme.accent : theme.fill_input);
+                painter.StrokeRoundedRect(box, 3.0f, on ? theme.accent : theme.control_stroke);
+                if (state == CheckState::Checked)
+                    painter.DrawCheck({box.x + 9.0f, box.y + 9.0f}, 10.0f, theme.accent_text, 1.5f);
+                else if (state == CheckState::Indeterminate)
+                    painter.FillRoundedRect({box.x + 5.0f, box.y + 8.0f, 8.0f, 2.0f}, 1.0f, theme.accent_text);
+            } else if (cell_w > 0.5f && !columns_[c].title.empty()) {
                 painter.DrawText(columns_[c].title,
                                  {absolute_.x + xs[c] + kCellPadX, header.y, cell_w, header.h},
-                                 TextRole::CaptionStrong,
+                                 header_role_,
                                  theme.text);
             }
             if (sort_rank >= 0 && sort_keys_.size() > 1) {
@@ -2803,20 +2881,23 @@ void Table::Draw(Painter& painter, const Theme& theme) {
                     if (columns_[c].kind != CellKind::Text) continue;
                     if (prepared.text.empty()) continue;
                     if (prepared.segments.empty()) {
-                        painter.DrawText(prepared.text, cell, TextRole::Caption, theme.text,
-                                         (columns_[c].numeric || columns_[c].numeric_text) ? Align::Trailing : Align::Leading);
+                        painter.DrawText(prepared.text, cell, role_, theme.text,
+                                         columns_[c].alignment.value_or((columns_[c].numeric || columns_[c].numeric_text) ? Align::Trailing : Align::Leading));
                         continue;
                     }
-                    float text_x = cell.x;
+                    const Align align = columns_[c].alignment.value_or((columns_[c].numeric || columns_[c].numeric_text)
+                        ? Align::Trailing : Align::Leading);
+                    const float spare = std::max(0.0f, cell.w - prepared.width);
+                    float offset = align == Align::Trailing ? spare : align == Align::Center ? spare * .5f : 0.0f;
                     for (const auto& part : prepared.segments) {
-                        if (text_x >= cell.Right()) break;
+                        if (offset >= cell.w) break;
                         const std::wstring_view segment(prepared.text.data() + part.begin, part.length);
-                        const Rect rect{text_x, cell.y, cell.Right() - text_x, cell.h};
+                        const Rect rect{cell.x + offset, cell.y, cell.w - offset, cell.h};
                         if (part.custom) {
                             FontFamilyScope font(cell_font_family_);
-                            painter.DrawText(segment, rect, TextRole::Caption, theme.text);
-                        } else painter.DrawText(segment, rect, TextRole::Caption, theme.text);
-                        text_x += part.advance;
+                            painter.DrawText(segment, rect, role_, theme.text);
+                        } else painter.DrawText(segment, rect, role_, theme.text);
+                        offset += part.advance;
                     }
                 }
             };
@@ -2865,18 +2946,26 @@ void Table::Draw(Painter& painter, const Theme& theme) {
             painter.PushClip(body_clip);
             const auto paint_group_header = [&](size_t g, float y) {
                 if (y + GroupBand() < body_y || y > body_bottom) return;
+                const Rect content = GroupHeaderContentRect(y, frozen_width);
                 if (!ink) {
                     painter.FillRect({absolute_.x, y, absolute_.w, GroupBand()},
                                      theme.fill_input_hover);
                     painter.FillRect({absolute_.x, y + GroupBand() - 1.0f, absolute_.w, 1.0f},
                                      theme.stroke_divider);
-                    painter.DrawChevron({absolute_.x + 14.0f, y + GroupBand() * 0.5f}, 8.0f,
-                                        groups_[g].expanded ? 0.0f : -90.0f, theme.text_secondary,
-                                        1.4f);
-                } else {
+                    if (!content.IsEmpty()) {
+                        painter.PushClip(content);
+                        painter.DrawChevron({content.x + 14.0f, y + GroupBand() * 0.5f}, 8.0f,
+                                            groups_[g].expanded ? 0.0f : -90.0f,
+                                            theme.text_secondary, 1.4f);
+                        painter.PopClip();
+                    }
+                } else if (!content.IsEmpty()) {
+                    painter.PushClip(content);
                     painter.DrawText(groups_[g].key,
-                                     {absolute_.x + 26.0f, y, absolute_.w - 40.0f, GroupBand()},
-                                     TextRole::CaptionStrong, theme.text);
+                                     {content.x + 26.0f, y,
+                                      std::max(0.0f, content.w - 40.0f), GroupBand()},
+                                     header_role_, theme.text);
+                    painter.PopClip();
                 }
             };
             float cursor = 0.0f;
@@ -2922,7 +3011,7 @@ void Table::Draw(Painter& painter, const Theme& theme) {
                         painter.DrawText(text,
                                          {cell_x + kCellPadX, footer.y,
                                           std::max(0.0f, ws[c] - kCellPadX * 2.0f), footer.h},
-                                         TextRole::Caption, theme.text_secondary);
+                                         role_, theme.text_secondary);
                     }
                     painter.PopClip();
                 };
@@ -2939,9 +3028,29 @@ void Table::Draw(Painter& painter, const Theme& theme) {
             const Rect footer = FooterRect();
             if (!footer.IsEmpty()) bottom = footer.Bottom();
         }
-        painter.FillRect({absolute_.x + frozen_width - 1.0f, absolute_.y, 1.0f,
-                          std::max(0.0f, bottom - absolute_.y)},
-                         theme.control_stroke);
+        const float divider_x = absolute_.x + frozen_width - 1.0f;
+        float line_top = absolute_.y;
+        const auto skip_group_band = [&](float y) {
+            const float top = std::clamp(y, absolute_.y + header_h, bottom);
+            if (top > line_top)
+                painter.FillRect({divider_x, line_top, 1.0f, top - line_top}, theme.control_stroke);
+            line_top = std::max(line_top, std::min(y + GroupBand(), absolute_.y + header_h + body_h));
+        };
+        if (!groups_.empty() && body_h > 0.5f) {
+            const float body_y = absolute_.y + header_h;
+            // Group headers span the table, including the frozen columns.
+            skip_group_band(body_y);
+            float cursor = 0.0f;
+            for (const Group& group : groups_) {
+                const float y = body_y + cursor - scroll_offset_;
+                if (y >= body_y + body_h) break;
+                if (y > body_y) skip_group_band(y);
+                cursor += GroupBand();
+                if (group.expanded) cursor += static_cast<float>(group.count) * row_h;
+            }
+        }
+        if (bottom > line_top)
+            painter.FillRect({divider_x, line_top, 1.0f, bottom - line_top}, theme.control_stroke);
     }
     if (!ink && reorder_dragging_ && drop_col_ >= 0 && drop_col_ < static_cast<int>(n) &&
         ws[static_cast<size_t>(drop_col_)] > 0.5f) {

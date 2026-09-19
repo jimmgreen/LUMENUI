@@ -12,6 +12,9 @@ namespace lumen {
 
 class Switch : public ControlOf<Switch> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    Switch& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     Switch() = default;
     explicit Switch(std::wstring_view text) : text_(text) {}
 
@@ -37,6 +40,7 @@ public:
     }
 
 protected:
+    TextRole role_ = TextRole::Body;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Draw(Painter& painter, const Theme& theme) override;

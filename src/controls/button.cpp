@@ -72,6 +72,7 @@ Button& Button::operator=(Button&& o) noexcept {
     command_ = o.command_;
     o.command_ = nullptr;
     o.cmd_changed_ = {};
+    o.cmd_destroyed_ = {};
     RebindCommand();
     return *this;
 }

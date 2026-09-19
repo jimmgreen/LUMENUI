@@ -41,7 +41,35 @@ struct BenchRoot : StackPanel {
 
 struct BenchTable : Table { using Table::Measure; using Table::Arrange; using Table::Prepare; using Table::Draw; using Table::OnMouseMove; };
 
+struct BenchLog : LogView { using LogView::Arrange; using LogView::Prepare; using LogView::Draw; };
+
+bool LogAllocationBench(Painter& painter, const Theme& theme) {
+    BenchLog log;
+    size_t reads = 0;
+    log.Entry([&](size_t i, LogEntry& entry) {
+        ++reads;
+        entry.timestamp = L"17:00:00.123";
+        entry.level = static_cast<LogLevel>(i % 4);
+        entry.source = L"worker";
+        entry.message = L"An extended log message with a payload that exceeds short string storage";
+        entry.trace = L"trace=12345";
+    }).ItemCount(100000);
+    log.Arrange({0, 0, 1000, 312});
+    reads = 0;
+    log.Prepare(painter, theme);
+    const size_t prepared_reads = reads;
+    allocation_probe::count = allocation_probe::bytes = 0;
+    allocation_probe::enabled = true;
+    log.Draw(painter, theme);
+    allocation_probe::enabled = false;
+    const bool pass = prepared_reads <= 14 && reads == prepared_reads && allocation_probe::count == 0;
+    std::printf("[%s] log 100000 rows: visible reads=%zu Draw allocations=%zu\n",
+                pass ? "PASS" : "FAIL", prepared_reads, allocation_probe::count);
+    return pass;
+}
+
 bool TableAllocationBench(OffscreenRenderer& renderer, Painter& painter, const Theme& theme) {
+    if (!LogAllocationBench(painter, theme)) return false;
     BenchTable table;
     table.AddColumn(L"Engineering identifier and mixed text", 520);
     table.AddColumn(L"Amount", 180);

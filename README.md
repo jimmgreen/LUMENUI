@@ -253,11 +253,25 @@ inbox.RemoveAt(0);
 | `ListView` | 虚拟化、多选、`Bind(ItemsModel)` |
 | `GridView` | 虚拟化图标网格 |
 | `Table` | 拖列宽、排序、行内编辑、`Column(title, &T::mem)` |
-| `LogView` | 等宽、贴底、Ctrl+C |
+| `LogView` | 结构化分栏、搜索、级别筛选/计数、贴底跟随、完整日志复制 |
 | `TreeView` / `TreeTable` | 虚拟化树 |
 | `TabControl` / `Pagination` / `Carousel` | 标签、分页、轮播 |
 
 `Table::SelectedIndex()` 是视图行；数据行用 `SelectedDataIndex()`。
+
+### 实例文字规格与列对齐
+
+文字使用 `TextRole`，测量和绘制共享实例设置。`Role(TextRole::Caption)` 选择紧凑正文，`CaptionStrong` 选择同字号加粗文字；不修改全局字体 token。原有默认角色保持兼容。
+
+- `Label`、输入框、选项、`Switch`、`Chip`、`TreeView`、`Segmented` 均可设置 `Role`。
+- `SettingsCard`：`TitleRole` / `DescriptionRole`；`InfoBar`：`TitleRole` / `MessageRole`。
+- `FormField`：标签 `Role`、`DescriptionRole` / `ErrorRole`；子输入框使用自己的 `Role`。
+- `TokenBox`：输入 `Role`、标签 `ChipRole`；新建及已有标签同步更新。
+- `EmptyState`：`TitleRole` / `HintRole` / `ActionRole`，支持操作按钮创建前配置。
+- `TabControl`：`Role` / `SelectedRole`；宽度同时考虑普通和选中文字。
+- `Table`：正文及编辑器 `Role`、表头和分组 `HeaderRole`。行高继续由 `RowHeight` 控制。
+- `table.AddColumn(L"标高").Alignment(Align::Leading)` 或 `ColumnAlignment(index, Align::Leading)` 设置该列显示对齐；传 `std::nullopt` 恢复自动对齐（数值靠右、文字靠左）。不改变数值解析、校验和排序；编辑器沿用 TextBox 左对齐。
+
 
 ### 导航
 

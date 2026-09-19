@@ -127,7 +127,11 @@ TreeView& TreeView::SetFlatData(const std::vector<size_t>& parents) {
     child_count_ = [this](size_t id) {
         return id < flat_children_.size() ? flat_children_[id].size() : size_t{0};
     };
-    child_at_ = [this](size_t id, size_t index) { return flat_children_[id][index]; };
+    child_at_ = [this](size_t id, size_t index) {
+        return id < flat_children_.size() && index < flat_children_[id].size()
+                   ? flat_children_[id][index]
+                   : size_t{0};
+    };
     root_count_ = root_ids_.size();
     RebuildVisible();
     return *this;
@@ -539,7 +543,7 @@ void TreeView::Draw(Painter& painter, const Theme& theme) {
         if (!draw_text_.empty()) {
             painter.DrawText(draw_text_,
                              {x, row_rect.y, absolute_.Right() - 12.0f - x, row_rect.h},
-                             TextRole::Body, theme.text);
+                             role_, theme.text);
         }
     }
 

@@ -364,4 +364,129 @@ private:
     ScopedConnection reset_;
 };
 
+// 本地分页装饰器：页码 1-based；BeginIndex/EndIndex 是源模型上的 [begin,end) 0-based 区间。
+// 只负责窗口化现有模型，不承担远端取数；远端分页继续由 Pagination 回调 + 业务模型组合。
+class PagedModel : public ItemsModel {
+public:
+    explicit PagedModel(std::shared_ptr<ItemsModel> source, size_t page_size = 20)
+        : PagedModel(RequireSource(source), page_size) { owned_source_ = std::move(source); }
+    explicit PagedModel(ItemsModel& source, size_t page_size = 20)
+        : source_(&source), page_size_(std::max<size_t>(1, page_size)) {
+        BindSource();
+        known_page_count_ = ComputePageCount();
+    }
+
+    PagedModel& PageSize(size_t size) {
+        const size_t next = std::max<size_t>(1, size);
+        if (page_size_ == next) return *this;
+        const size_t old_current = current_;
+        const size_t old_pages = known_page_count_;
+        page_size_ = next;
+        const size_t pages = ComputePageCount();
+        current_ = std::clamp(current_, size_t{1}, pages);
+        known_page_count_ = pages;
+        NotifyReset();
+        if (old_current != current_ || old_pages != pages) page_changed_.Emit(current_, pages);
+        return *this;
+    }
+    size_t PageSize() const noexcept { return page_size_; }
+
+    // 编程翻页（1-based）。仅真实页变化时 Reset 当前视图并发 OnPageChanged。
+    PagedModel& Current(size_t page) {
+        const size_t next = std::clamp(page, size_t{1}, PageCount());
+        if (current_ == next) return *this;
+        current_ = next;
+        known_page_count_ = PageCount();
+        NotifyReset();
+        page_changed_.Emit(current_, known_page_count_);
+        return *this;
+    }
+    size_t Current() const noexcept { return current_; }
+    size_t PageCount() const noexcept { return ComputePageCount(); }
+    size_t TotalCount() const noexcept { return source_ ? source_->Count() : 0; }
+    size_t BeginIndex() const noexcept {
+        if (!source_) return 0;
+        return std::min((current_ - 1) * page_size_, source_->Count());
+    }
+    size_t EndIndex() const noexcept { return BeginIndex() + Count(); }
+
+    PagedModel& OnPageChanged(std::function<void(size_t current, size_t page_count)> handler) {
+        page_changed_.Subscribe(std::move(handler));
+        return *this;
+    }
+    Connection BindPageChanged(std::function<void(size_t current, size_t page_count)> handler) {
+        return page_changed_.Connect(std::move(handler));
+    }
+
+    size_t Count() const noexcept override {
+        if (!source_) return 0;
+        const size_t begin = BeginIndex();
+        const size_t total = source_->Count();
+        return begin < total ? std::min(page_size_, total - begin) : 0;
+    }
+    void Get(size_t index, ItemRow& out) const override {
+        if (!source_ || index >= Count()) {
+            out.text.clear();
+            out.glyph.clear();
+            out.cells.clear();
+            return;
+        }
+        source_->Get(BeginIndex() + index, out);
+    }
+    size_t SourceIndex(size_t view) const noexcept override {
+        return source_ && view < Count() ? source_->SourceIndex(BeginIndex() + view) : view;
+    }
+    uint64_t RowKey(size_t view) const noexcept override {
+        return source_ && view < Count() ? source_->RowKey(BeginIndex() + view) : 0;
+    }
+
+private:
+    static ItemsModel& RequireSource(const std::shared_ptr<ItemsModel>& source) {
+        if (!source) throw std::invalid_argument("PagedModel requires a source");
+        return *source;
+    }
+    size_t ComputePageCount() const noexcept {
+        const size_t total = TotalCount();
+        return total == 0 ? size_t{1} : size_t{1} + (total - 1) / page_size_;
+    }
+    void BindSource() {
+        if (!source_) return;
+        inserted_ = ScopedConnection(source_->OnInserted([this](size_t, size_t) { OnSourceMut(); }));
+        removed_ = ScopedConnection(source_->OnRemoved([this](size_t, size_t) { OnSourceMut(); }));
+        changed_ = ScopedConnection(source_->OnChanged([this](size_t, size_t) { OnSourceMut(); }));
+        reset_ = ScopedConnection(source_->OnReset([this] { OnSourceMut(); }));
+        detached_ = ScopedConnection(source_->OnDetached([this] { OnSourceDetached(); }));
+    }
+    void OnSourceMut() {
+        const size_t old_current = current_;
+        const size_t old_pages = known_page_count_;
+        const size_t pages = ComputePageCount();
+        current_ = std::clamp(current_, size_t{1}, pages);
+        known_page_count_ = pages;
+        NotifyReset();
+        if (old_current != current_ || old_pages != pages) page_changed_.Emit(current_, pages);
+    }
+    void OnSourceDetached() {
+        const size_t old_current = current_;
+        const size_t old_pages = known_page_count_;
+        source_ = nullptr;
+        current_ = 1;
+        known_page_count_ = 1;
+        NotifyReset();
+        if (old_current != 1 || old_pages != 1) page_changed_.Emit(1, 1);
+    }
+
+    ItemsModel* source_ = nullptr;
+    std::shared_ptr<ItemsModel> owned_source_;
+    size_t page_size_ = 20;
+    size_t current_ = 1;
+    size_t known_page_count_ = 1;
+    Signal<size_t, size_t> page_changed_;
+    ScopedConnection detached_;
+    ScopedConnection inserted_;
+    ScopedConnection removed_;
+    ScopedConnection changed_;
+    ScopedConnection reset_;
+};
+
 } // namespace lumen

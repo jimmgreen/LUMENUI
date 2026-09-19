@@ -25,6 +25,12 @@ struct TabItem {
 
 class TabControl : public PanelOf<TabControl> {
 public:
+    TextRole SelectedRole() const noexcept { return selected_role_; }
+    TabControl& SelectedRole(TextRole value) { selected_role_ = value; RelayoutParent(); return *this; }
+
+    TextRole Role() const noexcept { return role_; }
+    TabControl& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     // 新增一页并返回其内容容器（纵向 StackPanel）。控件由 TabControl 持有。
     StackPanel& AddTab(std::wstring_view title);
     StackPanel& AddTab(TabItem item);
@@ -75,6 +81,8 @@ public:
     }
 
 protected:
+    TextRole selected_role_ = TextRole::BodyStrong;
+    TextRole role_ = TextRole::Body;
     friend class WindowImpl;
     Size Measure(Size available, const Theme& theme) override;
     void Arrange(const Rect& absolute) override;

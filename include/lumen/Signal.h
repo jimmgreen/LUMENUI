@@ -120,6 +120,10 @@ public:
     Connection() noexcept = default;
     Connection(void (*erase)(void*, uint64_t), void* ctx, uint64_t id) noexcept
         : erase_(erase), signal_(ctx), id_(id) {}
+    // 挂存活令牌的变体：源（如 WindowImpl）析构置空令牌后，断开成为 no-op。
+    Connection(void (*erase)(void*, uint64_t), void* ctx, uint64_t id,
+               std::shared_ptr<SignalAlive> alive) noexcept
+        : erase_(erase), signal_(ctx), id_(id), alive_(std::move(alive)) {}
     template<class... Args>
     Connection(Signal<Args...>* signal, uint64_t id,
                std::shared_ptr<SignalAlive> alive) noexcept
@@ -256,19 +260,24 @@ private:
 template <class T>
 class Computed {
 public:
+    // value_ 经 shared_ptr 间接持有：重算连接捕获指针而非 this，Computed 移动后依赖不断链。
     template <class Fn, class... P>
-    Computed(Fn fn, Property<P>&... deps) {
-        auto recompute = [this, fn] { value_.Set(fn()); };
+    Computed(Fn fn, Property<P>&... deps) : value_(std::make_shared<Property<T>>()) {
+        auto recompute = [value = value_, fn] { value->Set(fn()); };
         (deps_.push_back(ScopedConnection(deps.OnChanged([recompute](const auto&) { recompute(); }))), ...);
         recompute();
     }
-    const T& Get() const noexcept { return value_.Get(); }
+    // 移动转移依赖订阅（moved-from 不再更新但 Get 仍可读，与 Signal 退役语义一致）；
+    // 依赖连接与构造位置绑定，不支持移动赋值。
+    Computed(Computed&& o) noexcept : value_(o.value_), deps_(std::move(o.deps_)) {}
+    Computed& operator=(Computed&&) = delete;
+    const T& Get() const noexcept { return value_->Get(); }
     operator const T&() const noexcept { return Get(); }
-    Connection OnChanged(std::function<void(const T&)> fn) { return value_.OnChanged(std::move(fn)); }
-    Property<T>& AsProperty() noexcept { return value_; }
+    Connection OnChanged(std::function<void(const T&)> fn) { return value_->OnChanged(std::move(fn)); }
+    Property<T>& AsProperty() noexcept { return *value_; }
 
 private:
-    Property<T> value_;
+    std::shared_ptr<Property<T>> value_;
     std::vector<ScopedConnection> deps_;
 };
 

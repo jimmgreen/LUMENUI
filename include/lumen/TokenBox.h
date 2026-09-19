@@ -16,6 +16,10 @@ class Chip;
 class TokenBox : public PanelOf<TokenBox> {
 public:
     TokenBox();
+    TextRole Role() const noexcept;
+    TokenBox& Role(TextRole value);
+    TextRole ChipRole() const noexcept { return chip_role_; }
+    TokenBox& ChipRole(TextRole value);
 
     const std::vector<std::wstring>& Tokens() const noexcept { return tokens_; }
     TokenBox& Tokens(std::vector<std::wstring> value);
@@ -71,6 +75,7 @@ private:
     void NotifyChanged();
     bool AtLimit() const noexcept;
     Chip* ChipAt(size_t token_index);
+    TextRole chip_role_ = TextRole::Caption;
     Field* field_ = nullptr;
     std::vector<std::wstring> tokens_;
     std::wstring placeholder_{L"Add"};

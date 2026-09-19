@@ -88,7 +88,9 @@ Settings& Settings::Put(std::wstring_view name, bool value) {
 }
 
 Settings& Settings::Put(std::wstring_view name, double value) {
-    const std::wstring text = std::to_wstring(value);
+    // to_wstring 只有 6 位有效数字，主题/布局数值持久化回读会失真；%.9g 保证 float 精确回读。
+    wchar_t text[40]{};
+    std::swprintf(text, 40, L"%.9g", value);
     return Put(name, std::wstring_view(text));
 }
 

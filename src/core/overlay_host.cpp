@@ -163,6 +163,10 @@ void WindowImpl::ShowTransient(Window* window, Control* overlay, const Control* 
     impl->Invalidate();
 }
 
+bool WindowImpl::TransientContains(Window* window, const Control* control) {
+    return window && OverlayContains(window->Impl()->active_flyout_, control);
+}
+
 void WindowImpl::CloseTransient(Window* window) {
     if (window) window->Impl()->CloseFlyout();
 }
@@ -253,6 +257,8 @@ void WindowImpl::FinishDrawer(Window* window) {
 void WindowImpl::FinishDrawer() {
     if (!active_drawer_) return;
     Drawer* closing = active_drawer_;
+    // 先收起抽屉锚定的独立浮层，避免 ForgetTree 清空锚点后浮层留在窗口中。
+    if (OverlayContains(closing, flyout_anchor_)) CloseFlyout();
     Control* restore = drawer_focus_return_;
     drawer_focus_return_ = nullptr;
     if (focused_ && OverlayContains(closing, focused_)) SetFocusControl(nullptr);

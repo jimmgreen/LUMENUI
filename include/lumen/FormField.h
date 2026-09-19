@@ -40,6 +40,15 @@ inline Rule operator|(Rule a, Rule b) {
 
 class FormField : public PanelOf<FormField> {
 public:
+    TextRole ErrorRole() const noexcept { return error_role_; }
+    FormField& ErrorRole(TextRole value) { error_role_ = value; RelayoutParent(); return *this; }
+
+    TextRole DescriptionRole() const noexcept { return description_role_; }
+    FormField& DescriptionRole(TextRole value) { description_role_ = value; RelayoutParent(); return *this; }
+
+    TextRole Role() const noexcept { return role_; }
+    FormField& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
+
     FormField() = default;
     explicit FormField(std::wstring_view label) : label_(label) {}
 
@@ -99,6 +108,9 @@ public:
     }
 
 protected:
+    TextRole error_role_ = TextRole::Caption;
+    TextRole description_role_ = TextRole::Caption;
+    TextRole role_ = TextRole::Body;
     friend class WindowImpl;
     friend class Form;
     Size Measure(Size available, const Theme& theme) override;

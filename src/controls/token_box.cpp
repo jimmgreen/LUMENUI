@@ -51,8 +51,8 @@ public:
     float PadRight() const override { return 4.0f; }
 
     Size Measure(Size, const Theme&) override {
-        float width = MeasureText(text_, TextRole::Body).w;
-        if (!ime_comp_.empty()) width += MeasureText(ime_comp_, TextRole::Body).w;
+        float width = MeasureText(text_, ContentRole()).w;
+        if (!ime_comp_.empty()) width += MeasureText(ime_comp_, ContentRole()).w;
         width += PadLeft() + PadRight() + 2.0f;
         return {std::max(kFieldMin, width), kChipH};
     }
@@ -79,6 +79,23 @@ public:
         return TextBox::OnChar(ch);
     }
 };
+
+TextRole TokenBox::Role() const noexcept { return field_->Role(); }
+
+TokenBox& TokenBox::Role(TextRole value) {
+    field_->Role(value);
+    RelayoutParent();
+    return *this;
+}
+
+TokenBox& TokenBox::ChipRole(TextRole value) {
+    chip_role_ = value;
+    for (size_t i = 0; i < tokens_.size(); ++i) {
+        if (auto* chip = ChipAt(i)) chip->Role(value);
+    }
+    RelayoutParent();
+    return *this;
+}
 
 TokenBox::TokenBox() {
     Clip(true);
@@ -146,7 +163,7 @@ void TokenBox::CompactHidden() {
 }
 
 void TokenBox::InsertChip(std::wstring_view text) {
-    auto& chip = Add<Chip>(text);
+    auto& chip = Add<Chip>(text).Role(chip_role_);
     chip.Closable(true).Enabled(enabled_);
     chip.OnClosed([this, &chip] {
         size_t seen = 0;

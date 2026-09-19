@@ -15,7 +15,7 @@ constexpr uint32_t kMkLeft = 0x0001;
 void Chip::RelayoutParent() { Control::RelayoutParent(); }
 
 Size Chip::Measure(Size, const Theme&) {
-    float width = MeasureText(text_, TextRole::Caption).w + 24.0f;
+    float width = MeasureText(text_, role_).w + 24.0f;
     if (!glyph_.empty()) width += 16.0f;
     if (closable_) width += kCloseW - 4.0f;
     return {std::max(width, 32.0f), 28.0f};
@@ -142,7 +142,7 @@ void Chip::Draw(Painter& painter, const Theme& theme) {
     }
 
     const float glyph_w = glyph_.empty() ? 0.0f : 16.0f;
-    const float text_w = MeasureText(text_, TextRole::Caption).w;
+    const float text_w = MeasureText(text_, role_).w;
     const float gap = glyph_w > 0.0f ? 6.0f : 0.0f;
     const float close = closable_ ? kCloseW : 0.0f;
     const float content_w = glyph_w + gap + text_w;
@@ -151,7 +151,7 @@ void Chip::Draw(Painter& painter, const Theme& theme) {
         painter.DrawIcon(glyph_, {x, absolute_.y, glyph_w, absolute_.h}, 16.0f, fg);
     }
     painter.DrawText(text_, {x + glyph_w + gap, absolute_.y, text_w, absolute_.h},
-                     TextRole::Caption, fg);
+                     role_, fg);
     if (closable_) {
         const Rect close_r{absolute_.Right() - kCloseW, absolute_.y, kCloseW, absolute_.h};
         if (close_hover_) {

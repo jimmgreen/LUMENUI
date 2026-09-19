@@ -16,6 +16,12 @@ class Button;
 class EmptyState : public StackPanel {
 public:
     EmptyState();
+    TextRole TitleRole() const noexcept;
+    EmptyState& TitleRole(TextRole value);
+    TextRole HintRole() const noexcept;
+    EmptyState& HintRole(TextRole value);
+    TextRole ActionRole() const noexcept { return action_role_; }
+    EmptyState& ActionRole(TextRole value);
 
     EmptyState& Title(std::wstring_view value);
     const std::wstring& Title() const noexcept;
@@ -27,6 +33,7 @@ public:
     EmptyState& Action(std::wstring_view label, std::function<void()> on_click);
 
 protected:
+    TextRole action_role_ = TextRole::BodyStrong;
     Label* title_ = nullptr;
     Label* hint_ = nullptr;
     IconView* icon_ = nullptr;

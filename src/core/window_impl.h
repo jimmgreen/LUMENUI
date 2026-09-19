@@ -92,6 +92,7 @@ public:
     static void ShowTransient(Window* window, Control* overlay, const Control* anchor,
                               float width, bool prefer_above,
                               std::function<void()> closed = {});
+    static bool TransientContains(Window* window, const Control* control);
     static void CloseTransient(Window* window);
     static bool TransientActive(Window* window, const Control* overlay = nullptr);
 
@@ -150,6 +151,7 @@ public:
     Window::TimerId SetInterval(float seconds, std::function<void()> fn, bool once);
     void ClearTimer(Window::TimerId id);
     void BindShortcut(std::wstring_view chord, std::function<void()> fn);
+    void BindCommand(Command& command);
     void RememberPlacement(std::wstring_view registry_path);
     void TrayIcon(void* hicon, std::wstring_view tooltip);
     void OnTrayClick(std::function<void()> handler);
@@ -247,6 +249,7 @@ private:
     bool LegacyMouseFromPointer() const;
     void DispatchTouch(Point client_dip, int phase);
     bool OnKeyDown(uint32_t vk);
+    bool IsFocusChainUsable(const Control* control) const noexcept;
     bool TryShortcuts(uint32_t vk);
     bool FireMenuShortcuts(const std::vector<MenuItem>& items, uint32_t vk);
     void ScanMenuBarShortcuts(Control* tree, uint32_t vk, bool& hit);
@@ -261,6 +264,7 @@ private:
     void SyncImeCaret();
     bool ImeClientCaret(POINT* caret_px, int* line_h_px, RECT* doc_px) const;
     Control* ImeTarget() const;
+    bool IsImeComposing(const Control* target) const;
     bool OnImeRequest(WPARAM wparam, LPARAM lparam, LRESULT* result);
     void HandleImeComposition(LPARAM lparam);
     void TrackMouse();
@@ -458,6 +462,8 @@ private:
     bool in_size_move_ = false;
     bool tracking_mouse_ = false;
     bool ime_syncing_ = false;
+    // 原生会话覆盖首个组字串之前、结果上屏之后的字符消息空隙。
+    WeakRef<Control> native_ime_target_;
     LARGE_INTEGER last_tick_{};
     std::vector<Control*> anim_targets_;
     std::unique_ptr<Dialog> owned_dialog_;
@@ -467,6 +473,8 @@ private:
     };
     std::vector<FrameCb> frame_cbs_;
     uint64_t next_frame_id_ = 1;
+    std::shared_ptr<SignalAlive> frame_alive_ = std::make_shared<SignalAlive>();
+    std::vector<std::pair<Command*, ScopedConnection>> command_shortcuts_;
     struct OleDropTarget;
     OleDropTarget* ole_drop_ = nullptr;
     bool ole_initialized_ = false;

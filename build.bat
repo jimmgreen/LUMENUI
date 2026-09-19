@@ -2,6 +2,9 @@
 setlocal
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+rem Optional first argument selects an isolated build directory; existing caches are never deleted.
+set "BUILD_DIR=%ROOT%\build"
+if not "%~1"=="" set "BUILD_DIR=%~f1"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 set "VCVARS="
 if exist "%VSWHERE%" (
@@ -13,5 +16,5 @@ if not defined VCVARS (
     exit /b 1
 )
 call "%VCVARS%" || exit /b 1
-cmake -S "%ROOT%" -B "%ROOT%\build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLUMEN_WITH_LUMATEXT=ON -DLUMEN_REQUIRE_LUMATEXT=ON -DLUMEN_USE_PREBUILT_LUMATEXT=ON "-DLUMATEXT_PREBUILT_DIR=%ROOT%\third_party\lumatext" || exit /b 1
-cmake --build "%ROOT%\build" || exit /b 1
+cmake -S "%ROOT%" -B "%BUILD_DIR%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLUMEN_BUILD_EXAMPLES=ON -DLUMEN_BUILD_TESTS=ON -DLUMEN_WITH_LUMATEXT=ON -DLUMEN_REQUIRE_LUMATEXT=ON -DLUMEN_USE_PREBUILT_LUMATEXT=ON "-DLUMATEXT_PREBUILT_DIR=%ROOT%\third_party\lumatext" || exit /b 1
+cmake --build "%BUILD_DIR%" || exit /b 1

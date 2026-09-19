@@ -12,6 +12,8 @@ namespace lumen {
 
 class Chip : public ControlOf<Chip> {
 public:
+    TextRole Role() const noexcept { return role_; }
+    Chip& Role(TextRole value) { role_ = value; RelayoutParent(); return *this; }
     Chip() = default;
     explicit Chip(std::wstring_view text) : text_(text) {}
 
@@ -85,6 +87,7 @@ protected:
     void Dismiss();
     bool CloseHit(Point local) const noexcept;
 
+    TextRole role_ = TextRole::Caption;
     std::wstring text_;
     std::wstring glyph_;
     Color foreground_{0.0f, 0.0f, 0.0f, 0.0f};   // 默认次要字色

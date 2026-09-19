@@ -219,7 +219,7 @@ protected:
     }
 
     bool OnKey(uint32_t vk) override {
-        if (vk == VK_ESCAPE) { WindowImpl::CloseTransient(window_); return true; }
+        if (vk == VK_ESCAPE) { owner_->CloseDropdown(); return true; }
         if (vk == VK_RETURN || (vk == VK_SPACE && !owner_->editable_)) { Commit(); return true; }
         if (owner_->editable_ && (vk == VK_HOME || vk == VK_END)) return owner_->EditKey(vk);
         if (vk == VK_UP || vk == VK_DOWN || vk == VK_HOME || vk == VK_END ||
@@ -424,12 +424,11 @@ private:
         owner_->selected_ = selected;
         owner_->RememberSelection();
         ComboBox* owner = owner_;
-        Window* window = window_;
         WeakRef<ComboBox> live(owner);
         if (owner->editable_) { owner->Text(owner->items_[drop.index]); owner->CommitText(); }
         if (!live) return;
         owner->Invalidate();
-        WindowImpl::CloseTransient(window);
+        owner->CloseDropdown();
         if (live && changed) owner->changed_.Emit(owner->selected_, owner->selected_);
     }
 
@@ -448,7 +447,7 @@ ComboBox::ComboBox() : popup_(std::make_unique<DropdownPopup>(this)) {
     Clip(true);
 }
 ComboBox::~ComboBox() {
-    if (window_ && WindowImpl::TransientActive(window_, popup_.get())) WindowImpl::CloseTransient(window_);
+    CloseDropdown();
 }
 
 void ComboBox::RelayoutParent() { Control::RelayoutParent(); }
@@ -858,16 +857,33 @@ void ComboBox::OpenPopup(bool from_typing) {
     dropdown_open_ = true;
     Animate();
     Invalidate();
+    if (WindowImpl::TransientContains(window_, this)) {
+        native_dropdown_ = true;
+        WeakRef<ComboBox> self(this);
+        window_->ShowPopup(*popup_, this, absolute_.w, [&self] {
+            if (auto* combo = self.Get()) {
+                combo->native_dropdown_ = false;
+                combo->dropdown_open_ = false;
+                combo->Animate();
+                combo->Invalidate();
+            }
+        });
+        return;
+    }
     WindowImpl::ShowTransient(window_, popup_.get(), this, absolute_.w, false,
                               [this] { dropdown_open_ = false; Animate(); Invalidate(); });
 }
 
+void ComboBox::CloseDropdown() {
+    if (!window_ || !dropdown_open_) return;
+    if (native_dropdown_) window_->ClosePopup();
+    else if (WindowImpl::TransientActive(window_, popup_.get())) WindowImpl::CloseTransient(window_);
+}
+
 bool ComboBox::AutomationCollapse() {
     if (!enabled_) return false;
-    if (dropdown_open_ && window_ && WindowImpl::TransientActive(window_, popup_.get())) {
-        WindowImpl::CloseTransient(window_);
-    }
-    return !dropdown_open_;
+    CloseDropdown();
+    return !dropdown_open_ || native_dropdown_;
 }
 
 void ComboBox::TypeJump(wchar_t ch) {
